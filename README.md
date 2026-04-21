@@ -1,25 +1,31 @@
 # zarrow-compute
 
-`zarrow-compute` 是一个面向 Apache Arrow Compute 的 Zig 下游库。  
-它引用并复用 [`tylitianrui/zarrow`](https://github.com/tylitianrui/zarrow) 提供的 compute 框架层（`zarrow-core`），在本仓库实现具体 kernels。
+`zarrow-compute` is a Zig downstream library for Apache Arrow Compute.  
+It reuses the compute framework layer (`zarrow-core`) from [`tylitianrui/zarrow`](https://github.com/tylitianrui/zarrow) and implements concrete compute kernels in this repository.
 
-## 当前已实现
+## Implemented Kernels
 
-- `add_i64`（vector）
-- `divide_i64`（vector）
-- `cast_i64_to_i32`（vector）
-- `count_rows`（aggregate，含 stateful lifecycle）
+- `add_i64` (vector)
+- `divide_i64` (vector)
+- `cast_i64_to_i32` (vector)
+- `count_rows` (aggregate with stateful lifecycle)
 
-## 快速开始
+## Quick Start
 
 ```bash
 zig build test
 zig build example-basic
 ```
 
-示例输出（`zig build example-basic`）：
+Example output (`zig build example-basic`):
 
 ```text
 add_i64 => [6, null, 8]
 count_rows => 3
 ```
+
+## Documentation
+
+- Chinese README: [docs/README.zh.md](docs/README.zh.md)
+- Upstream Compute API doc (no local download required):  
+  <https://github.com/tylitianrui/zarrow/blob/master/docs/compute-api-zh.md>
