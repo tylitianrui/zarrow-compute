@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.15.1",
     .dependencies = .{
         .zarrow = .{
-            .url = "https://github.com/tylitianrui/zarrow/archive/refs/tags/v0.0.2.tar.gz",
-            .hash = "zarrow-0.0.2-I8BLE_t2SgCeAXzMmaAo33saipJ0tCheMQJez1nRk4n2",
+            .url = "https://github.com/tylitianrui/zarrow/archive/refs/heads/master.tar.gz",
+            .hash = "zarrow-0.0.2-I8BLE_R2SgBlB98PjS0WZjbWXIJGkOe8UWyM8YpwCt8t",
         },
     },
     .paths = .{
