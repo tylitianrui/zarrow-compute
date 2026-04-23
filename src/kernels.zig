@@ -172,12 +172,13 @@ test "register base kernels exposes expected registry surface and resolvable sig
     defer registry.deinit();
     try registerBaseKernels(&registry);
 
-    try std.testing.expectEqual(@as(usize, 8), registry.functionCount());
+    try std.testing.expectEqual(@as(usize, 9), registry.functionCount());
 
     const vector_names = [_][]const u8{
         "add_i64",
         "filter",
         "filter_i64",
+        "drop_null",
         "subtract_i64",
         "divide_i64",
         "multiply_i64",
@@ -237,6 +238,21 @@ test "register base kernels exposes expected registry surface and resolvable sig
     });
     try std.testing.expect(filter_ty.eql(.{ .int32 = {} }));
 
+    const drop_null_args = [_]compute.Datum{
+        compute.Datum.fromArray(filter_values.retain()),
+    };
+    defer {
+        var d = drop_null_args[0];
+        d.release();
+    }
+    const drop_null_ty = try registry.resolveResultType(
+        "drop_null",
+        .vector,
+        drop_null_args[0..],
+        compute.Options.noneValue(),
+    );
+    try std.testing.expect(drop_null_ty.eql(.{ .int32 = {} }));
+
     const cast_args = [_]compute.Datum{
         compute.Datum.fromScalar(.{
             .data_type = .{ .int64 = {} },
@@ -285,6 +301,7 @@ test "register compat kernels matches base registry surface" {
         "add_i64",
         "filter",
         "filter_i64",
+        "drop_null",
         "subtract_i64",
         "divide_i64",
         "multiply_i64",
@@ -807,6 +824,92 @@ test "filter rejects unsupported nested value type at dispatch" {
     try std.testing.expectError(
         error.NoMatchingKernel,
         ctx.invokeVector("filter", args[0..], .{ .filter = .{} }),
+    );
+}
+
+test "drop_null removes nulls from int64 arrays and keeps type" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeInt64Array(allocator, &[_]?i64{ 10, null, 20, null, 30 });
+    defer values.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("drop_null", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .int64 = {} }));
+
+    const view = zcore.Int64Array{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), view.len());
+    try std.testing.expectEqual(@as(i64, 10), view.value(0));
+    try std.testing.expectEqual(@as(i64, 20), view.value(1));
+    try std.testing.expectEqual(@as(i64, 30), view.value(2));
+}
+
+test "drop_null supports chunked input and preserves order" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var c0 = try makeInt64Array(allocator, &[_]?i64{ 1, null });
+    defer c0.release();
+    var c1 = try makeInt64Array(allocator, &[_]?i64{ null, 2, 3 });
+    defer c1.release();
+    var chunked = try compute.ChunkedArray.init(allocator, .{ .int64 = {} }, &[_]zcore.ArrayRef{ c0, c1 });
+    defer chunked.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromChunked(chunked.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("drop_null", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .int64 = {} }));
+
+    const view = zcore.Int64Array{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), view.len());
+    try std.testing.expectEqual(@as(i64, 1), view.value(0));
+    try std.testing.expectEqual(@as(i64, 2), view.value(1));
+    try std.testing.expectEqual(@as(i64, 3), view.value(2));
+}
+
+test "drop_null rejects unsupported nested value type at dispatch" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeListInt32Array(allocator);
+    defer values.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    try std.testing.expectError(
+        error.NoMatchingKernel,
+        ctx.invokeVector("drop_null", args[0..], compute.Options.noneValue()),
     );
 }
 

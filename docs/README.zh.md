@@ -7,6 +7,7 @@
 
 - `add_i64`（vector）
 - `filter`（vector，支持 `null/bool/定长类型/string/binary` values + `bool` predicate，使用 `Options.filter`）
+- `drop_null`（vector，支持与 `filter` 相同的值类型子集，使用 `Options.none`）
 - `subtract_i64`（vector）
 - `divide_i64`（vector）
 - `multiply_i64`（vector）
@@ -27,6 +28,7 @@ add_i64 => [6, null, 8]
 subtract_i64 => [-4, null, -2]
 multiply_i64 => [5, null, 15]
 filter => [1, null, null]
+drop_null => [1, 3]
 count_rows => 3
 ```
 

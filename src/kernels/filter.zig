@@ -344,3 +344,51 @@ pub fn filterKernel(
         },
     };
 }
+
+pub fn dropNullKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    options: compute.Options,
+) compute.KernelError!compute.Datum {
+    if (args.len != 1) return error.InvalidArity;
+    if (!common.onlyNoOptions(options)) return error.InvalidOptions;
+
+    const input_len: usize = switch (args[0]) {
+        .array => |arr| arr.data().length,
+        .chunked => |chunks| chunks.len(),
+        .scalar => return error.InvalidInput,
+    };
+
+    var predicate_builder = try zcore.BooleanBuilder.init(ctx.tempAllocator(), input_len);
+    defer predicate_builder.deinit();
+
+    var iter = compute.UnaryExecChunkIterator.init(args[0]);
+    while (try iter.next()) |chunk_value| {
+        var chunk = chunk_value;
+        defer chunk.deinit();
+
+        var i: usize = 0;
+        while (i < chunk.len) : (i += 1) {
+            const keep = !chunk.values.isNullAt(i);
+            predicate_builder.append(keep) catch |err| return common.kernelAppendError(err);
+        }
+    }
+
+    var predicate = predicate_builder.finish() catch |err| return common.kernelAppendError(err);
+    defer predicate.release();
+
+    const filter_args = [_]compute.Datum{
+        args[0].retain(),
+        compute.Datum.fromArray(predicate.retain()),
+    };
+    defer {
+        var d = filter_args[0];
+        d.release();
+    }
+    defer {
+        var d = filter_args[1];
+        d.release();
+    }
+
+    return filterKernel(ctx, filter_args[0..], .{ .filter = .{} });
+}

@@ -109,6 +109,17 @@ pub fn main() !void {
     defer filter_out.release();
     try printInt64DatumLine("filter", filter_out);
 
+    const drop_null_args = [_]compute.Datum{
+        compute.Datum.fromArray(left.retain()),
+    };
+    defer {
+        var d = drop_null_args[0];
+        d.release();
+    }
+    var drop_null_out = try ctx.invokeVector("drop_null", drop_null_args[0..], compute.Options.noneValue());
+    defer drop_null_out.release();
+    try printInt64DatumLine("drop_null", drop_null_out);
+
     var count = try ctx.invokeAggregate("count_rows", args[0..1], compute.Options.noneValue());
     defer count.release();
     std.debug.print("count_rows => {d}\n", .{count.scalar.value.i64});

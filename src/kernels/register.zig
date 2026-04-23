@@ -37,6 +37,16 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
         .exec = filter.filterKernel,
     });
 
+    try registry.registerVectorKernel("drop_null", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unarySupportedFilter,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultSameAsFirst,
+        },
+        .exec = filter.dropNullKernel,
+    });
+
     try registry.registerVectorKernel("subtract_i64", .{
         .signature = .{
             .arity = 2,

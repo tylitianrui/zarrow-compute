@@ -96,6 +96,10 @@ pub fn unaryArrayLike(args: []const compute.Datum) bool {
     return args.len == 1 and (args[0].isArray() or args[0].isChunked());
 }
 
+pub fn unarySupportedFilter(args: []const compute.Datum) bool {
+    return args.len == 1 and isFilterSupportedType(args[0].dataType()) and (args[0].isArray() or args[0].isChunked());
+}
+
 pub fn resultI64(args: []const compute.Datum, options: compute.Options) compute.KernelError!compute.DataType {
     _ = options;
     if (args.len == 0) return error.InvalidArity;

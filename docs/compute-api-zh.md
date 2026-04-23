@@ -14,6 +14,7 @@
 
 - `add_i64`（vector）
 - `filter`（vector，支持 `null/bool/定长类型/string/binary` values + `bool` predicate）
+- `drop_null`（vector，支持 `null/bool/定长类型/string/binary` values）
 - `subtract_i64`（vector）
 - `divide_i64`（vector）
 - `multiply_i64`（vector）
@@ -49,6 +50,7 @@
 - `multiply_i64` 仅接受 `Options.arithmetic`
 - `filter` 仅接受 `Options.filter`（`drop_nulls=true` 时丢弃 predicate null；`drop_nulls=false` 时输出 null）
   - 当前支持值类型：`null`、`bool`、定长 primitive/temporal/decimal/`fixed_size_binary`、`string/large_string/string_view`、`binary/large_binary/binary_view`
+- `drop_null` 仅接受 `Options.none`（删除输入中的 null，保留非 null 值的相对顺序）
 - `cast_i64_to_i32` 仅接受 `Options.cast`
 - `count_rows` 仅接受 `Options.none`
 
@@ -78,7 +80,7 @@
 - `compute.UnaryExecChunkIterator`
 - `chunk.binaryNullAt(i)` / `chunk.unaryNullAt(i)`
 
-这也是当前 `add_i64`、`filter`、`subtract_i64`、`divide_i64`、`multiply_i64`、`cast_i64_to_i32` 的实现方式。
+这也是当前 `add_i64`、`filter`、`drop_null`、`subtract_i64`、`divide_i64`、`multiply_i64`、`cast_i64_to_i32` 的实现方式。
 
 ## 7. 聚合生命周期（count_rows）
 
