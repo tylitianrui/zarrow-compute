@@ -3,7 +3,7 @@
 本文档基于上游 `zarrow` 的 Compute API 文档整理，面向当前仓库的下游 kernel 开发与使用。
 
 - 上游参考：<https://github.com/tylitianrui/zarrow/blob/master/docs/compute-api-zh.md>
-- 当前仓库核心实现：`src/kernels.zig`
+- 当前仓库核心实现：`src/kernels/*.zig` 与 `src/kernels.zig`
 
 ## 1. 目标与边界
 
@@ -15,6 +15,8 @@
 - `add_i64`（vector）
 - `filter`（vector，支持 `null/bool/定长类型/string/binary` values + `bool` predicate）
 - `drop_null`（vector，支持 `null/bool/定长类型/string/binary` values）
+- `is_null`（vector，输出 `bool` 掩码）
+- `is_valid`（vector，输出 `bool` 掩码）
 - `subtract_i64`（vector）
 - `divide_i64`（vector）
 - `multiply_i64`（vector）
@@ -51,6 +53,7 @@
 - `filter` 仅接受 `Options.filter`（`drop_nulls=true` 时丢弃 predicate null；`drop_nulls=false` 时输出 null）
   - 当前支持值类型：`null`、`bool`、定长 primitive/temporal/decimal/`fixed_size_binary`、`string/large_string/string_view`、`binary/large_binary/binary_view`
 - `drop_null` 仅接受 `Options.none`（删除输入中的 null，保留非 null 值的相对顺序）
+- `is_null` / `is_valid` 仅接受 `Options.none`
 - `cast_i64_to_i32` 仅接受 `Options.cast`
 - `count_rows` 仅接受 `Options.none`
 
@@ -80,7 +83,7 @@
 - `compute.UnaryExecChunkIterator`
 - `chunk.binaryNullAt(i)` / `chunk.unaryNullAt(i)`
 
-这也是当前 `add_i64`、`filter`、`drop_null`、`subtract_i64`、`divide_i64`、`multiply_i64`、`cast_i64_to_i32` 的实现方式。
+这也是当前 `add_i64`、`filter`、`drop_null`、`is_null`、`is_valid`、`subtract_i64`、`divide_i64`、`multiply_i64`、`cast_i64_to_i32` 的实现方式。
 
 ## 7. 聚合生命周期（count_rows）
 

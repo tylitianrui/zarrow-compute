@@ -8,6 +8,8 @@
 - `add_i64`（vector）
 - `filter`（vector，支持 `null/bool/定长类型/string/binary` values + `bool` predicate，使用 `Options.filter`）
 - `drop_null`（vector，支持与 `filter` 相同的值类型子集，使用 `Options.none`）
+- `is_null`（vector，将 null 位图映射为 `bool` 掩码，使用 `Options.none`）
+- `is_valid`（vector，`is_null` 的反向掩码，使用 `Options.none`）
 - `subtract_i64`（vector）
 - `divide_i64`（vector）
 - `multiply_i64`（vector）
@@ -29,6 +31,8 @@ subtract_i64 => [-4, null, -2]
 multiply_i64 => [5, null, 15]
 filter => [1, null, null]
 drop_null => [1, 3]
+is_null => [false, true, false]
+is_valid => [true, false, true]
 count_rows => 3
 ```
 

@@ -172,13 +172,15 @@ test "register base kernels exposes expected registry surface and resolvable sig
     defer registry.deinit();
     try registerBaseKernels(&registry);
 
-    try std.testing.expectEqual(@as(usize, 9), registry.functionCount());
+    try std.testing.expectEqual(@as(usize, 11), registry.functionCount());
 
     const vector_names = [_][]const u8{
         "add_i64",
         "filter",
         "filter_i64",
         "drop_null",
+        "is_null",
+        "is_valid",
         "subtract_i64",
         "divide_i64",
         "multiply_i64",
@@ -253,6 +255,21 @@ test "register base kernels exposes expected registry surface and resolvable sig
     );
     try std.testing.expect(drop_null_ty.eql(.{ .int32 = {} }));
 
+    const is_null_ty = try registry.resolveResultType(
+        "is_null",
+        .vector,
+        drop_null_args[0..],
+        compute.Options.noneValue(),
+    );
+    try std.testing.expect(is_null_ty.eql(.{ .bool = {} }));
+    const is_valid_ty = try registry.resolveResultType(
+        "is_valid",
+        .vector,
+        drop_null_args[0..],
+        compute.Options.noneValue(),
+    );
+    try std.testing.expect(is_valid_ty.eql(.{ .bool = {} }));
+
     const cast_args = [_]compute.Datum{
         compute.Datum.fromScalar(.{
             .data_type = .{ .int64 = {} },
@@ -302,6 +319,8 @@ test "register compat kernels matches base registry surface" {
         "filter",
         "filter_i64",
         "drop_null",
+        "is_null",
+        "is_valid",
         "subtract_i64",
         "divide_i64",
         "multiply_i64",
@@ -910,6 +929,95 @@ test "drop_null rejects unsupported nested value type at dispatch" {
     try std.testing.expectError(
         error.NoMatchingKernel,
         ctx.invokeVector("drop_null", args[0..], compute.Options.noneValue()),
+    );
+}
+
+test "is_null marks null positions for chunked input" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var c0 = try makeInt64Array(allocator, &[_]?i64{ 1, null });
+    defer c0.release();
+    var c1 = try makeInt64Array(allocator, &[_]?i64{ null, 2, 3 });
+    defer c1.release();
+    var chunked = try compute.ChunkedArray.init(allocator, .{ .int64 = {} }, &[_]zcore.ArrayRef{ c0, c1 });
+    defer chunked.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromChunked(chunked.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("is_null", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .bool = {} }));
+
+    const view = zcore.BooleanArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 5), view.len());
+    try std.testing.expect(!view.value(0));
+    try std.testing.expect(view.value(1));
+    try std.testing.expect(view.value(2));
+    try std.testing.expect(!view.value(3));
+    try std.testing.expect(!view.value(4));
+}
+
+test "is_valid is inverse of null positions" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeStringArray(allocator, &[_]?[]const u8{ "a", null, "b", null });
+    defer values.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("is_valid", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .bool = {} }));
+
+    const view = zcore.BooleanArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 4), view.len());
+    try std.testing.expect(view.value(0));
+    try std.testing.expect(!view.value(1));
+    try std.testing.expect(view.value(2));
+    try std.testing.expect(!view.value(3));
+}
+
+test "is_null rejects non-none options" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeInt64Array(allocator, &[_]?i64{ 1, null });
+    defer values.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    try std.testing.expectError(
+        error.InvalidOptions,
+        ctx.invokeVector("is_null", args[0..], .{ .filter = .{} }),
     );
 }
 

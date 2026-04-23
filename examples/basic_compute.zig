@@ -51,6 +51,22 @@ fn printInt64DatumLine(label: []const u8, datum: compute.Datum) !void {
     std.debug.print("]\n", .{});
 }
 
+fn printBoolDatumLine(label: []const u8, datum: compute.Datum) !void {
+    if (!datum.isArray()) return error.InvalidInput;
+    const view = zcore.BooleanArray{ .data = datum.array.data() };
+    std.debug.print("{s} => [", .{label});
+    var i: usize = 0;
+    while (i < view.len()) : (i += 1) {
+        if (i != 0) std.debug.print(", ", .{});
+        if (view.isNull(i)) {
+            std.debug.print("null", .{});
+        } else {
+            std.debug.print("{}", .{view.value(i)});
+        }
+    }
+    std.debug.print("]\n", .{});
+}
+
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
     var registry = compute.FunctionRegistry.init(allocator);
@@ -119,6 +135,14 @@ pub fn main() !void {
     var drop_null_out = try ctx.invokeVector("drop_null", drop_null_args[0..], compute.Options.noneValue());
     defer drop_null_out.release();
     try printInt64DatumLine("drop_null", drop_null_out);
+
+    var is_null_out = try ctx.invokeVector("is_null", drop_null_args[0..], compute.Options.noneValue());
+    defer is_null_out.release();
+    try printBoolDatumLine("is_null", is_null_out);
+
+    var is_valid_out = try ctx.invokeVector("is_valid", drop_null_args[0..], compute.Options.noneValue());
+    defer is_valid_out.release();
+    try printBoolDatumLine("is_valid", is_valid_out);
 
     var count = try ctx.invokeAggregate("count_rows", args[0..1], compute.Options.noneValue());
     defer count.release();

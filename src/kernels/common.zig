@@ -106,6 +106,12 @@ pub fn resultI64(args: []const compute.Datum, options: compute.Options) compute.
     return .{ .int64 = {} };
 }
 
+pub fn resultBool(args: []const compute.Datum, options: compute.Options) compute.KernelError!compute.DataType {
+    _ = options;
+    if (args.len == 0) return error.InvalidArity;
+    return .{ .bool = {} };
+}
+
 pub fn resultI32(args: []const compute.Datum, options: compute.Options) compute.KernelError!compute.DataType {
     if (args.len != 1) return error.InvalidArity;
     return switch (options) {

@@ -14,6 +14,8 @@
   - `cast`（当前仅 `int64 -> int32`）
   - `filter`（当前已覆盖 `null/bool/定长类型/string/binary` 值类型；嵌套/字典等复杂类型待补齐）
   - `drop_null`（当前已覆盖 `null/bool/定长类型/string/binary` 值类型；复杂类型待补齐）
+  - `is_null`（当前支持 array/chunked 输入，输出 `bool` 掩码）
+  - `is_valid`（当前支持 array/chunked 输入，输出 `bool` 掩码）
 - 非 Arrow 标准函数（仓库自定义）：
   - `count_rows`
 
@@ -260,8 +262,8 @@
 - [ ] `is_finite`
 - [ ] `is_inf`
 - [ ] `is_nan`
-- [ ] `is_null`
-- [ ] `is_valid`
+- [ ] `is_null`（当前已实现 array/chunked 输入基础版）
+- [ ] `is_valid`（当前已实现 array/chunked 输入基础版）
 - [ ] `true_unless_null`
 - [ ] `case_when`
 - [ ] `choose`

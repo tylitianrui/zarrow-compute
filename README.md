@@ -8,6 +8,8 @@ It reuses the compute framework layer (`zarrow-core`) from [`tylitianrui/zarrow`
 - `add_i64` (vector)
 - `filter` (vector, supports `null/bool/fixed-width/string/binary` value types + `bool` predicate, `Options.filter`)
 - `drop_null` (vector, supports the same value type subset as `filter`, `Options.none`)
+- `is_null` (vector, null bitmap to bool mask, `Options.none`)
+- `is_valid` (vector, inverse null bitmap to bool mask, `Options.none`)
 - `subtract_i64` (vector)
 - `divide_i64` (vector)
 - `multiply_i64` (vector)
@@ -29,6 +31,8 @@ subtract_i64 => [-4, null, -2]
 multiply_i64 => [5, null, 15]
 filter => [1, null, null]
 drop_null => [1, 3]
+is_null => [false, true, false]
+is_valid => [true, false, true]
 count_rows => 3
 ```
 
