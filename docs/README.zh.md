@@ -6,6 +6,7 @@
 ## 当前已实现
 
 - `add_i64`（vector）
+- `filter`（vector，`int64` values + `bool` predicate，使用 `Options.filter`）
 - `subtract_i64`（vector）
 - `divide_i64`（vector）
 - `multiply_i64`（vector）

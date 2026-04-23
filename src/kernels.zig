@@ -24,6 +24,13 @@ fn onlyCastOptions(options: compute.Options) bool {
     };
 }
 
+fn onlyFilterOptions(options: compute.Options) bool {
+    return switch (options) {
+        .filter => true,
+        else => false,
+    };
+}
+
 fn unaryInt64(args: []const compute.Datum) bool {
     return args.len == 1 and args[0].dataType().eql(.{ .int64 = {} });
 }
@@ -32,6 +39,12 @@ fn binaryInt64(args: []const compute.Datum) bool {
     return args.len == 2 and
         args[0].dataType().eql(.{ .int64 = {} }) and
         args[1].dataType().eql(.{ .int64 = {} });
+}
+
+fn binaryInt64Bool(args: []const compute.Datum) bool {
+    return args.len == 2 and
+        args[0].dataType().eql(.{ .int64 = {} }) and
+        args[1].dataType().eql(.{ .bool = {} });
 }
 
 fn unaryArrayLike(args: []const compute.Datum) bool {
@@ -86,6 +99,21 @@ fn readI64(value: compute.ExecChunkValue, logical_index: usize) compute.KernelEr
     };
 }
 
+fn readBool(value: compute.ExecChunkValue, logical_index: usize) compute.KernelError!bool {
+    return switch (value) {
+        .scalar => |s| switch (s.value) {
+            .bool => |v| v,
+            else => error.InvalidInput,
+        },
+        .array => |arr| blk: {
+            const dt = arr.data().data_type;
+            if (!dt.eql(.{ .bool = {} })) break :blk error.UnsupportedType;
+            const view = zcore.BooleanArray{ .data = arr.data() };
+            break :blk view.value(logical_index);
+        },
+    };
+}
+
 fn addI64Kernel(
     ctx: *compute.ExecContext,
     args: []const compute.Datum,
@@ -121,6 +149,51 @@ fn addI64Kernel(
                 lhs +% rhs;
 
             builder.append(sum) catch |err| return kernelAppendError(err);
+        }
+    }
+
+    const out = builder.finish() catch |err| return kernelAppendError(err);
+    return compute.Datum.fromArray(out);
+}
+
+fn filterI64Kernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    options: compute.Options,
+) compute.KernelError!compute.Datum {
+    if (args.len != 2) return error.InvalidArity;
+    const filter_opts = switch (options) {
+        .filter => |o| o,
+        else => return error.InvalidOptions,
+    };
+
+    const input_len = try compute.inferBinaryExecLen(args[0], args[1]);
+    var builder = try zcore.Int64Builder.init(ctx.tempAllocator(), input_len);
+    defer builder.deinit();
+
+    var iter = try compute.BinaryExecChunkIterator.init(args[0], args[1]);
+    while (try iter.next()) |chunk_value| {
+        var chunk = chunk_value;
+        defer chunk.deinit();
+
+        var i: usize = 0;
+        while (i < chunk.len) : (i += 1) {
+            if (chunk.rhs.isNullAt(i)) {
+                if (filter_opts.drop_nulls) continue;
+                builder.appendNull() catch |err| return kernelAppendError(err);
+                continue;
+            }
+
+            const keep = try readBool(chunk.rhs, i);
+            if (!keep) continue;
+
+            if (chunk.lhs.isNullAt(i)) {
+                builder.appendNull() catch |err| return kernelAppendError(err);
+                continue;
+            }
+
+            const value = try readI64(chunk.lhs, i);
+            builder.append(value) catch |err| return kernelAppendError(err);
         }
     }
 
@@ -398,6 +471,26 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
         .exec = addI64Kernel,
     });
 
+    try registry.registerVectorKernel("filter", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = binaryInt64Bool,
+            .options_check = onlyFilterOptions,
+            .result_type_fn = resultI64,
+        },
+        .exec = filterI64Kernel,
+    });
+
+    try registry.registerVectorKernel("filter_i64", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = binaryInt64Bool,
+            .options_check = onlyFilterOptions,
+            .result_type_fn = resultI64,
+        },
+        .exec = filterI64Kernel,
+    });
+
     try registry.registerVectorKernel("subtract_i64", .{
         .signature = .{
             .arity = 2,
@@ -473,6 +566,19 @@ fn makeInt64Array(allocator: std.mem.Allocator, values: []const ?i64) !zcore.Arr
     return builder.finish();
 }
 
+fn makeBoolArray(allocator: std.mem.Allocator, values: []const ?bool) !zcore.ArrayRef {
+    var builder = try zcore.BooleanBuilder.init(allocator, values.len);
+    defer builder.deinit();
+    for (values) |v| {
+        if (v) |x| {
+            try builder.append(x);
+        } else {
+            try builder.appendNull();
+        }
+    }
+    return builder.finish();
+}
+
 test "add_i64 supports scalar broadcast and null propagation" {
     const allocator = std.testing.allocator;
     var registry = compute.FunctionRegistry.init(allocator);
@@ -508,6 +614,79 @@ test "add_i64 supports scalar broadcast and null propagation" {
     try std.testing.expectEqual(@as(i64, 11), view.value(0));
     try std.testing.expect(view.isNull(1));
     try std.testing.expectEqual(@as(i64, 13), view.value(2));
+}
+
+test "filter keeps selected values, propagates value nulls, and drops null predicates by default" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeInt64Array(allocator, &[_]?i64{ 1, null, 3, 4 });
+    defer values.release();
+    var predicate = try makeBoolArray(allocator, &[_]?bool{ true, true, null, false });
+    defer predicate.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromArray(predicate.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("filter", args[0..], .{ .filter = .{} });
+    defer out.release();
+    try std.testing.expect(out.isArray());
+
+    const view = zcore.Int64Array{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 2), view.len());
+    try std.testing.expectEqual(@as(i64, 1), view.value(0));
+    try std.testing.expect(view.isNull(1));
+}
+
+test "filter emits null for null predicate when drop_nulls is false" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeInt64Array(allocator, &[_]?i64{ 7, 8, 9 });
+    defer values.release();
+    var predicate = try makeBoolArray(allocator, &[_]?bool{ true, null, true });
+    defer predicate.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromArray(predicate.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("filter_i64", args[0..], .{
+        .filter = .{ .drop_nulls = false },
+    });
+    defer out.release();
+    try std.testing.expect(out.isArray());
+
+    const view = zcore.Int64Array{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), view.len());
+    try std.testing.expectEqual(@as(i64, 7), view.value(0));
+    try std.testing.expect(view.isNull(1));
+    try std.testing.expectEqual(@as(i64, 9), view.value(2));
 }
 
 test "subtract_i64 supports null propagation and overflow behavior" {
