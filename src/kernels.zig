@@ -166,6 +166,151 @@ fn makeListInt32Array(allocator: std.mem.Allocator) !zcore.ArrayRef {
     return list_builder.finish(values);
 }
 
+test "register base kernels exposes expected registry surface and resolvable signatures" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+
+    try std.testing.expectEqual(@as(usize, 8), registry.functionCount());
+
+    const vector_names = [_][]const u8{
+        "add_i64",
+        "filter",
+        "filter_i64",
+        "subtract_i64",
+        "divide_i64",
+        "multiply_i64",
+        "cast_i64_to_i32",
+    };
+    for (vector_names) |name| {
+        try std.testing.expect(registry.containsFunction(name, .vector));
+        try std.testing.expectEqual(@as(usize, 1), registry.kernelCount(name, .vector));
+        try std.testing.expect(!registry.containsFunction(name, .aggregate));
+    }
+
+    try std.testing.expect(registry.containsFunction("count_rows", .aggregate));
+    try std.testing.expectEqual(@as(usize, 1), registry.kernelCount("count_rows", .aggregate));
+    try std.testing.expect(!registry.containsFunction("count_rows", .vector));
+    try std.testing.expectEqual(@as(usize, 0), registry.kernelCount("not_exist", .vector));
+
+    var add_lhs = try makeInt64Array(allocator, &[_]?i64{1});
+    defer add_lhs.release();
+    const add_args = [_]compute.Datum{
+        compute.Datum.fromArray(add_lhs.retain()),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int64 = {} },
+            .value = .{ .i64 = 2 },
+        }),
+    };
+    defer {
+        var d = add_args[0];
+        d.release();
+    }
+    defer {
+        var d = add_args[1];
+        d.release();
+    }
+    const add_ty = try registry.resolveResultType("add_i64", .vector, add_args[0..], .{
+        .arithmetic = .{},
+    });
+    try std.testing.expect(add_ty.eql(.{ .int64 = {} }));
+
+    var filter_values = try makeInt32Array(allocator, &[_]?i32{ 1, 2 });
+    defer filter_values.release();
+    var filter_pred = try makeBoolArray(allocator, &[_]?bool{ true, false });
+    defer filter_pred.release();
+    const filter_args = [_]compute.Datum{
+        compute.Datum.fromArray(filter_values.retain()),
+        compute.Datum.fromArray(filter_pred.retain()),
+    };
+    defer {
+        var d = filter_args[0];
+        d.release();
+    }
+    defer {
+        var d = filter_args[1];
+        d.release();
+    }
+    const filter_ty = try registry.resolveResultType("filter", .vector, filter_args[0..], .{
+        .filter = .{},
+    });
+    try std.testing.expect(filter_ty.eql(.{ .int32 = {} }));
+
+    const cast_args = [_]compute.Datum{
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int64 = {} },
+            .value = .{ .i64 = 7 },
+        }),
+    };
+    const cast_ty = try registry.resolveResultType("cast_i64_to_i32", .vector, cast_args[0..], .{
+        .cast = .{
+            .safe = true,
+            .to_type = .{ .int32 = {} },
+        },
+    });
+    try std.testing.expect(cast_ty.eql(.{ .int32 = {} }));
+
+    var count_input = try makeInt64Array(allocator, &[_]?i64{ 9, 10, 11 });
+    defer count_input.release();
+    const count_args = [_]compute.Datum{
+        compute.Datum.fromArray(count_input.retain()),
+    };
+    defer {
+        var d = count_args[0];
+        d.release();
+    }
+    const count_ty = try registry.resolveResultType(
+        "count_rows",
+        .aggregate,
+        count_args[0..],
+        compute.Options.noneValue(),
+    );
+    try std.testing.expect(count_ty.eql(.{ .int64 = {} }));
+}
+
+test "register compat kernels matches base registry surface" {
+    const allocator = std.testing.allocator;
+    var base_registry = compute.FunctionRegistry.init(allocator);
+    defer base_registry.deinit();
+    try registerBaseKernels(&base_registry);
+
+    var compat_registry = compute.FunctionRegistry.init(allocator);
+    defer compat_registry.deinit();
+    try registerCompatKernels(&compat_registry);
+
+    try std.testing.expectEqual(base_registry.functionCount(), compat_registry.functionCount());
+
+    const vector_names = [_][]const u8{
+        "add_i64",
+        "filter",
+        "filter_i64",
+        "subtract_i64",
+        "divide_i64",
+        "multiply_i64",
+        "cast_i64_to_i32",
+    };
+    for (vector_names) |name| {
+        try std.testing.expectEqual(
+            base_registry.containsFunction(name, .vector),
+            compat_registry.containsFunction(name, .vector),
+        );
+        try std.testing.expectEqual(
+            base_registry.kernelCount(name, .vector),
+            compat_registry.kernelCount(name, .vector),
+        );
+    }
+
+    try std.testing.expectEqual(
+        base_registry.containsFunction("count_rows", .aggregate),
+        compat_registry.containsFunction("count_rows", .aggregate),
+    );
+    try std.testing.expectEqual(
+        base_registry.kernelCount("count_rows", .aggregate),
+        compat_registry.kernelCount("count_rows", .aggregate),
+    );
+}
+
 test "add_i64 supports scalar broadcast and null propagation" {
     const allocator = std.testing.allocator;
     var registry = compute.FunctionRegistry.init(allocator);
