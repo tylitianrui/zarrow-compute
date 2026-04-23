@@ -17,6 +17,8 @@
 - `drop_null`（vector，支持 `null/bool/定长类型/string/binary` values）
 - `is_null`（vector，输出 `bool` 掩码）
 - `is_valid`（vector，输出 `bool` 掩码）
+- `true_unless_null`（vector，非 null 输出 `true`，null 输出 `false`）
+- `if_else`（vector，第一版支持 `fixed-width + string/binary` 子集）
 - `subtract_i64`（vector）
 - `divide_i64`（vector）
 - `multiply_i64`（vector）
@@ -54,6 +56,8 @@
   - 当前支持值类型：`null`、`bool`、定长 primitive/temporal/decimal/`fixed_size_binary`、`string/large_string/string_view`、`binary/large_binary/binary_view`
 - `drop_null` 仅接受 `Options.none`（删除输入中的 null，保留非 null 值的相对顺序）
 - `is_null` / `is_valid` 仅接受 `Options.none`
+- `true_unless_null` 仅接受 `Options.none`（非 null 结果为 `true`，null 结果为 `false`）
+- `if_else` 仅接受 `Options.none`（`condition` 为 null 输出 null；`true` 选左值；`false` 选右值；当前支持 `fixed-width + string/binary` 子集）
 - `cast_i64_to_i32` 仅接受 `Options.cast`
 - `count_rows` 仅接受 `Options.none`
 
@@ -83,7 +87,7 @@
 - `compute.UnaryExecChunkIterator`
 - `chunk.binaryNullAt(i)` / `chunk.unaryNullAt(i)`
 
-这也是当前 `add_i64`、`filter`、`drop_null`、`is_null`、`is_valid`、`subtract_i64`、`divide_i64`、`multiply_i64`、`cast_i64_to_i32` 的实现方式。
+这也是当前 `add_i64`、`filter`、`drop_null`、`is_null`、`is_valid`、`true_unless_null`、`if_else`、`subtract_i64`、`divide_i64`、`multiply_i64`、`cast_i64_to_i32` 的实现方式。
 
 ## 7. 聚合生命周期（count_rows）
 
@@ -111,6 +115,7 @@ zig build examples
 示例会展示：
 
 - `add_i64` / `subtract_i64` / `multiply_i64` 的 null 传播行为
+- `true_unless_null` / `if_else` 的条件语义基础版
 - `count_rows` 的聚合结果
 
 ## 9. 测试

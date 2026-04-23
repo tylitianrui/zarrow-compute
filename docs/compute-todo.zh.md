@@ -264,11 +264,11 @@
 - [ ] `is_nan`
 - [ ] `is_null`（当前已实现 array/chunked 输入基础版）
 - [ ] `is_valid`（当前已实现 array/chunked 输入基础版）
-- [ ] `true_unless_null`
+- [ ] `true_unless_null`（当前已实现 array/chunked 输入基础版）
 - [ ] `case_when`
 - [ ] `choose`
 - [ ] `coalesce`
-- [ ] `if_else`
+- [ ] `if_else`（当前已实现第一版：`fixed-width + string/binary` 子集，`Options.none`，condition null -> output null）
 - [ ] `cast`（当前仅 `int64 -> int32` 子集）
 
 ## 18. Temporal Rounding / Encoding / Format

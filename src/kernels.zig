@@ -172,7 +172,7 @@ test "register base kernels exposes expected registry surface and resolvable sig
     defer registry.deinit();
     try registerBaseKernels(&registry);
 
-    try std.testing.expectEqual(@as(usize, 11), registry.functionCount());
+    try std.testing.expectEqual(@as(usize, 13), registry.functionCount());
 
     const vector_names = [_][]const u8{
         "add_i64",
@@ -181,6 +181,8 @@ test "register base kernels exposes expected registry surface and resolvable sig
         "drop_null",
         "is_null",
         "is_valid",
+        "true_unless_null",
+        "if_else",
         "subtract_i64",
         "divide_i64",
         "multiply_i64",
@@ -269,6 +271,41 @@ test "register base kernels exposes expected registry surface and resolvable sig
         compute.Options.noneValue(),
     );
     try std.testing.expect(is_valid_ty.eql(.{ .bool = {} }));
+    const true_unless_null_ty = try registry.resolveResultType(
+        "true_unless_null",
+        .vector,
+        drop_null_args[0..],
+        compute.Options.noneValue(),
+    );
+    try std.testing.expect(true_unless_null_ty.eql(.{ .bool = {} }));
+
+    const if_else_args = [_]compute.Datum{
+        compute.Datum.fromArray(filter_pred.retain()),
+        compute.Datum.fromArray(filter_values.retain()),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int32 = {} },
+            .value = .{ .i32 = 7 },
+        }),
+    };
+    defer {
+        var d = if_else_args[0];
+        d.release();
+    }
+    defer {
+        var d = if_else_args[1];
+        d.release();
+    }
+    defer {
+        var d = if_else_args[2];
+        d.release();
+    }
+    const if_else_ty = try registry.resolveResultType(
+        "if_else",
+        .vector,
+        if_else_args[0..],
+        compute.Options.noneValue(),
+    );
+    try std.testing.expect(if_else_ty.eql(.{ .int32 = {} }));
 
     const cast_args = [_]compute.Datum{
         compute.Datum.fromScalar(.{
@@ -321,6 +358,8 @@ test "register compat kernels matches base registry surface" {
         "drop_null",
         "is_null",
         "is_valid",
+        "true_unless_null",
+        "if_else",
         "subtract_i64",
         "divide_i64",
         "multiply_i64",
@@ -1018,6 +1057,257 @@ test "is_null rejects non-none options" {
     try std.testing.expectError(
         error.InvalidOptions,
         ctx.invokeVector("is_null", args[0..], .{ .filter = .{} }),
+    );
+}
+
+test "true_unless_null returns true for non-null and false for null" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeBoolArray(allocator, &[_]?bool{ true, false, null, true });
+    defer values.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("true_unless_null", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .bool = {} }));
+
+    const view = zcore.BooleanArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 4), view.len());
+    try std.testing.expect(view.value(0));
+    try std.testing.expect(view.value(1));
+    try std.testing.expect(!view.value(2));
+    try std.testing.expect(view.value(3));
+}
+
+test "if_else supports fixed-width with scalar broadcast and condition null semantics" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var cond = try makeBoolArray(allocator, &[_]?bool{ true, false, null, true, false });
+    defer cond.release();
+    var lhs = try makeInt64Array(allocator, &[_]?i64{ 1, null, 3, 4, 5 });
+    defer lhs.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(cond.retain()),
+        compute.Datum.fromArray(lhs.retain()),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int64 = {} },
+            .value = .{ .i64 = 9 },
+        }),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("if_else", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .int64 = {} }));
+
+    const view = zcore.Int64Array{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 5), view.len());
+    try std.testing.expectEqual(@as(i64, 1), view.value(0));
+    try std.testing.expectEqual(@as(i64, 9), view.value(1));
+    try std.testing.expect(view.isNull(2));
+    try std.testing.expectEqual(@as(i64, 4), view.value(3));
+    try std.testing.expectEqual(@as(i64, 9), view.value(4));
+}
+
+test "if_else supports string values and null propagation from selected branch" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var cond = try makeBoolArray(allocator, &[_]?bool{ false, true, null });
+    defer cond.release();
+    var lhs = try makeStringArray(allocator, &[_]?[]const u8{ "L0", null, "L2" });
+    defer lhs.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(cond.retain()),
+        compute.Datum.fromArray(lhs.retain()),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .string = {} },
+            .value = .{ .string = "R" },
+        }),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("if_else", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .string = {} }));
+
+    const view = zcore.StringArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), view.len());
+    try std.testing.expect(std.mem.eql(u8, view.value(0), "R"));
+    try std.testing.expect(view.isNull(1));
+    try std.testing.expect(view.isNull(2));
+}
+
+test "if_else supports misaligned chunk boundaries across three inputs" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var cond_c0 = try makeBoolArray(allocator, &[_]?bool{true});
+    defer cond_c0.release();
+    var cond_c1 = try makeBoolArray(allocator, &[_]?bool{ false, null, true });
+    defer cond_c1.release();
+    var cond_chunked = try compute.ChunkedArray.init(allocator, .{ .bool = {} }, &[_]zcore.ArrayRef{ cond_c0, cond_c1 });
+    defer cond_chunked.release();
+
+    var lhs_c0 = try makeInt32Array(allocator, &[_]?i32{ 10, 11 });
+    defer lhs_c0.release();
+    var lhs_c1 = try makeInt32Array(allocator, &[_]?i32{ 12, 13 });
+    defer lhs_c1.release();
+    var lhs_chunked = try compute.ChunkedArray.init(allocator, .{ .int32 = {} }, &[_]zcore.ArrayRef{ lhs_c0, lhs_c1 });
+    defer lhs_chunked.release();
+
+    var rhs_c0 = try makeInt32Array(allocator, &[_]?i32{20});
+    defer rhs_c0.release();
+    var rhs_c1 = try makeInt32Array(allocator, &[_]?i32{ 21, 22, 23 });
+    defer rhs_c1.release();
+    var rhs_chunked = try compute.ChunkedArray.init(allocator, .{ .int32 = {} }, &[_]zcore.ArrayRef{ rhs_c0, rhs_c1 });
+    defer rhs_chunked.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromChunked(cond_chunked.retain()),
+        compute.Datum.fromChunked(lhs_chunked.retain()),
+        compute.Datum.fromChunked(rhs_chunked.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("if_else", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .int32 = {} }));
+
+    const view = zcore.Int32Array{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 4), view.len());
+    try std.testing.expectEqual(@as(i32, 10), try view.value(0));
+    try std.testing.expectEqual(@as(i32, 21), try view.value(1));
+    try std.testing.expect(view.isNull(2));
+    try std.testing.expectEqual(@as(i32, 13), try view.value(3));
+}
+
+test "if_else rejects unsupported nested value type at dispatch" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var cond = try makeBoolArray(allocator, &[_]?bool{ true, false });
+    defer cond.release();
+    var values = try makeListInt32Array(allocator);
+    defer values.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(cond.retain()),
+        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromArray(values.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+
+    try std.testing.expectError(
+        error.NoMatchingKernel,
+        ctx.invokeVector("if_else", args[0..], compute.Options.noneValue()),
+    );
+}
+
+test "if_else rejects non-none options" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var cond = try makeBoolArray(allocator, &[_]?bool{ true, false });
+    defer cond.release();
+    var lhs = try makeInt64Array(allocator, &[_]?i64{ 1, 2 });
+    defer lhs.release();
+    var rhs = try makeInt64Array(allocator, &[_]?i64{ 3, 4 });
+    defer rhs.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(cond.retain()),
+        compute.Datum.fromArray(lhs.retain()),
+        compute.Datum.fromArray(rhs.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+
+    try std.testing.expectError(
+        error.InvalidOptions,
+        ctx.invokeVector("if_else", args[0..], .{ .filter = .{} }),
     );
 }
 

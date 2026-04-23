@@ -10,6 +10,8 @@
 - `drop_null`（vector，支持与 `filter` 相同的值类型子集，使用 `Options.none`）
 - `is_null`（vector，将 null 位图映射为 `bool` 掩码，使用 `Options.none`）
 - `is_valid`（vector，`is_null` 的反向掩码，使用 `Options.none`）
+- `true_unless_null`（vector，非 null 输出 `true`，null 输出 `false`，使用 `Options.none`）
+- `if_else`（vector，第一版支持 `fixed-width + string/binary` 子集，使用 `Options.none`）
 - `subtract_i64`（vector）
 - `divide_i64`（vector）
 - `multiply_i64`（vector）
@@ -33,6 +35,8 @@ filter => [1, null, null]
 drop_null => [1, 3]
 is_null => [false, true, false]
 is_valid => [true, false, true]
+true_unless_null => [true, false, true]
+if_else => [1, null, 10]
 count_rows => 3
 ```
 

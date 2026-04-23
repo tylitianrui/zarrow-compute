@@ -144,6 +144,36 @@ pub fn main() !void {
     defer is_valid_out.release();
     try printBoolDatumLine("is_valid", is_valid_out);
 
+    var true_unless_null_out = try ctx.invokeVector("true_unless_null", drop_null_args[0..], compute.Options.noneValue());
+    defer true_unless_null_out.release();
+    try printBoolDatumLine("true_unless_null", true_unless_null_out);
+
+    var cond = try makeBoolArray(allocator, &[_]?bool{ true, null, false });
+    defer cond.release();
+    const if_else_args = [_]compute.Datum{
+        compute.Datum.fromArray(cond.retain()),
+        compute.Datum.fromArray(left.retain()),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int64 = {} },
+            .value = .{ .i64 = 10 },
+        }),
+    };
+    defer {
+        var d = if_else_args[0];
+        d.release();
+    }
+    defer {
+        var d = if_else_args[1];
+        d.release();
+    }
+    defer {
+        var d = if_else_args[2];
+        d.release();
+    }
+    var if_else_out = try ctx.invokeVector("if_else", if_else_args[0..], compute.Options.noneValue());
+    defer if_else_out.release();
+    try printInt64DatumLine("if_else", if_else_out);
+
     var count = try ctx.invokeAggregate("count_rows", args[0..1], compute.Options.noneValue());
     defer count.release();
     std.debug.print("count_rows => {d}\n", .{count.scalar.value.i64});

@@ -2,6 +2,7 @@ const common = @import("common.zig");
 const arithmetic = @import("arithmetic.zig");
 const filter = @import("filter.zig");
 const nulls = @import("nulls.zig");
+const conditionals = @import("conditionals.zig");
 const cast = @import("cast.zig");
 const aggregate = @import("aggregate.zig");
 
@@ -66,6 +67,26 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
             .result_type_fn = common.resultBool,
         },
         .exec = nulls.isValidKernel,
+    });
+
+    try registry.registerVectorKernel("true_unless_null", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unaryArrayLike,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultBool,
+        },
+        .exec = conditionals.trueUnlessNullKernel,
+    });
+
+    try registry.registerVectorKernel("if_else", .{
+        .signature = .{
+            .arity = 3,
+            .type_check = common.ternaryBoolIfElseSupported,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultSameAsSecond,
+        },
+        .exec = conditionals.ifElseKernel,
     });
 
     try registry.registerVectorKernel("subtract_i64", .{

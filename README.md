@@ -10,6 +10,8 @@ It reuses the compute framework layer (`zarrow-core`) from [`tylitianrui/zarrow`
 - `drop_null` (vector, supports the same value type subset as `filter`, `Options.none`)
 - `is_null` (vector, null bitmap to bool mask, `Options.none`)
 - `is_valid` (vector, inverse null bitmap to bool mask, `Options.none`)
+- `true_unless_null` (vector, true for non-null values and false for null values, `Options.none`)
+- `if_else` (vector, first version supports fixed-width + string/binary subset, `Options.none`)
 - `subtract_i64` (vector)
 - `divide_i64` (vector)
 - `multiply_i64` (vector)
@@ -33,6 +35,8 @@ filter => [1, null, null]
 drop_null => [1, 3]
 is_null => [false, true, false]
 is_valid => [true, false, true]
+true_unless_null => [true, false, true]
+if_else => [1, null, 10]
 count_rows => 3
 ```
 

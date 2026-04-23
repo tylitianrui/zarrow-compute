@@ -86,6 +86,13 @@ pub fn isFilterSupportedType(data_type: compute.DataType) bool {
     };
 }
 
+pub fn isIfElseSupportedType(data_type: compute.DataType) bool {
+    return switch (data_type) {
+        .string, .large_string, .string_view, .binary, .large_binary, .binary_view => true,
+        else => isFilterFixedWidthType(data_type),
+    };
+}
+
 pub fn binarySupportedFilter(args: []const compute.Datum) bool {
     return args.len == 2 and
         isFilterSupportedType(args[0].dataType()) and
@@ -98,6 +105,13 @@ pub fn unaryArrayLike(args: []const compute.Datum) bool {
 
 pub fn unarySupportedFilter(args: []const compute.Datum) bool {
     return args.len == 1 and isFilterSupportedType(args[0].dataType()) and (args[0].isArray() or args[0].isChunked());
+}
+
+pub fn ternaryBoolIfElseSupported(args: []const compute.Datum) bool {
+    return args.len == 3 and
+        args[0].dataType().eql(.{ .bool = {} }) and
+        args[1].dataType().eql(args[2].dataType()) and
+        isIfElseSupportedType(args[1].dataType());
 }
 
 pub fn resultI64(args: []const compute.Datum, options: compute.Options) compute.KernelError!compute.DataType {
@@ -129,6 +143,12 @@ pub fn resultSameAsFirst(args: []const compute.Datum, options: compute.Options) 
     _ = options;
     if (args.len == 0) return error.InvalidArity;
     return args[0].dataType();
+}
+
+pub fn resultSameAsSecond(args: []const compute.Datum, options: compute.Options) compute.KernelError!compute.DataType {
+    _ = options;
+    if (args.len < 2) return error.InvalidArity;
+    return args[1].dataType();
 }
 
 pub fn kernelAppendError(err: anyerror) compute.KernelError {
