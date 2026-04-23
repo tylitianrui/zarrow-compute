@@ -6,7 +6,9 @@ It reuses the compute framework layer (`zarrow-core`) from [`tylitianrui/zarrow`
 ## Implemented Kernels
 
 - `add_i64` (vector)
+- `subtract_i64` (vector)
 - `divide_i64` (vector)
+- `multiply_i64` (vector)
 - `cast_i64_to_i32` (vector)
 - `count_rows` (aggregate with stateful lifecycle)
 
@@ -14,18 +16,21 @@ It reuses the compute framework layer (`zarrow-core`) from [`tylitianrui/zarrow`
 
 ```bash
 zig build test
-zig build example-basic
+zig build examples
 ```
 
-Example output (`zig build example-basic`):
+Example output (`zig build examples`):
 
 ```text
 add_i64 => [6, null, 8]
+subtract_i64 => [-4, null, -2]
+multiply_i64 => [5, null, 15]
 count_rows => 3
 ```
 
 ## Documentation
 
 - Chinese README: [docs/README.zh.md](docs/README.zh.md)
+- Apache Compute reference (ZH): [docs/apache-compute-dev-reference.zh.md](docs/apache-compute-dev-reference.zh.md)
 - Upstream Compute API doc (no local download required):  
   <https://github.com/tylitianrui/zarrow/blob/master/docs/compute-api-zh.md>

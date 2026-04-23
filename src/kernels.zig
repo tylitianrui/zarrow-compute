@@ -74,11 +74,12 @@ fn readI64(value: compute.ExecChunkValue, logical_index: usize) compute.KernelEr
             const dt = arr.data().data_type;
             if (dt.eql(.{ .int64 = {} })) {
                 const view = zcore.Int64Array{ .data = arr.data() };
-                break :blk view.value(logical_index);
+                break :blk view.value(logical_index) catch return error.InvalidInput;
             }
             if (dt.eql(.{ .int32 = {} })) {
                 const view = zcore.Int32Array{ .data = arr.data() };
-                break :blk @as(i64, view.value(logical_index));
+                const v = view.value(logical_index) catch return error.InvalidInput;
+                break :blk @as(i64, v);
             }
             break :blk error.UnsupportedType;
         },
@@ -120,6 +121,90 @@ fn addI64Kernel(
                 lhs +% rhs;
 
             builder.append(sum) catch |err| return kernelAppendError(err);
+        }
+    }
+
+    const out = builder.finish() catch |err| return kernelAppendError(err);
+    return compute.Datum.fromArray(out);
+}
+
+fn subtractI64Kernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    options: compute.Options,
+) compute.KernelError!compute.Datum {
+    if (args.len != 2) return error.InvalidArity;
+    const arithmetic_opts = switch (options) {
+        .arithmetic => |o| o,
+        else => return error.InvalidOptions,
+    };
+
+    const out_len = try compute.inferBinaryExecLen(args[0], args[1]);
+    var builder = try zcore.Int64Builder.init(ctx.tempAllocator(), out_len);
+    defer builder.deinit();
+
+    var iter = try compute.BinaryExecChunkIterator.init(args[0], args[1]);
+    while (try iter.next()) |chunk_value| {
+        var chunk = chunk_value;
+        defer chunk.deinit();
+
+        var i: usize = 0;
+        while (i < chunk.len) : (i += 1) {
+            if (chunk.binaryNullAt(i)) {
+                builder.appendNull() catch |err| return kernelAppendError(err);
+                continue;
+            }
+
+            const lhs = try readI64(chunk.lhs, i);
+            const rhs = try readI64(chunk.rhs, i);
+            const diff = if (arithmetic_opts.check_overflow)
+                std.math.sub(i64, lhs, rhs) catch return error.Overflow
+            else
+                lhs -% rhs;
+
+            builder.append(diff) catch |err| return kernelAppendError(err);
+        }
+    }
+
+    const out = builder.finish() catch |err| return kernelAppendError(err);
+    return compute.Datum.fromArray(out);
+}
+
+fn multiplyI64Kernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    options: compute.Options,
+) compute.KernelError!compute.Datum {
+    if (args.len != 2) return error.InvalidArity;
+    const arithmetic_opts = switch (options) {
+        .arithmetic => |o| o,
+        else => return error.InvalidOptions,
+    };
+
+    const out_len = try compute.inferBinaryExecLen(args[0], args[1]);
+    var builder = try zcore.Int64Builder.init(ctx.tempAllocator(), out_len);
+    defer builder.deinit();
+
+    var iter = try compute.BinaryExecChunkIterator.init(args[0], args[1]);
+    while (try iter.next()) |chunk_value| {
+        var chunk = chunk_value;
+        defer chunk.deinit();
+
+        var i: usize = 0;
+        while (i < chunk.len) : (i += 1) {
+            if (chunk.binaryNullAt(i)) {
+                builder.appendNull() catch |err| return kernelAppendError(err);
+                continue;
+            }
+
+            const lhs = try readI64(chunk.lhs, i);
+            const rhs = try readI64(chunk.rhs, i);
+            const product = if (arithmetic_opts.check_overflow)
+                std.math.mul(i64, lhs, rhs) catch return error.Overflow
+            else
+                lhs *% rhs;
+
+            builder.append(product) catch |err| return kernelAppendError(err);
         }
     }
 
@@ -313,6 +398,16 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
         .exec = addI64Kernel,
     });
 
+    try registry.registerVectorKernel("subtract_i64", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = binaryInt64,
+            .options_check = onlyArithmeticOptions,
+            .result_type_fn = resultI64,
+        },
+        .exec = subtractI64Kernel,
+    });
+
     try registry.registerVectorKernel("divide_i64", .{
         .signature = .{
             .arity = 2,
@@ -321,6 +416,16 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
             .result_type_fn = resultI64,
         },
         .exec = divideI64Kernel,
+    });
+
+    try registry.registerVectorKernel("multiply_i64", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = binaryInt64,
+            .options_check = onlyArithmeticOptions,
+            .result_type_fn = resultI64,
+        },
+        .exec = multiplyI64Kernel,
     });
 
     try registry.registerVectorKernel("cast_i64_to_i32", .{
@@ -405,6 +510,67 @@ test "add_i64 supports scalar broadcast and null propagation" {
     try std.testing.expectEqual(@as(i64, 13), view.value(2));
 }
 
+test "subtract_i64 supports null propagation and overflow behavior" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var lhs = try makeInt64Array(allocator, &[_]?i64{ 9, null, -3 });
+    defer lhs.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(lhs.retain()),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int64 = {} },
+            .value = .{ .i64 = 4 },
+        }),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("subtract_i64", args[0..], .{ .arithmetic = .{} });
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    const view = zcore.Int64Array{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), view.len());
+    try std.testing.expectEqual(@as(i64, 5), view.value(0));
+    try std.testing.expect(view.isNull(1));
+    try std.testing.expectEqual(@as(i64, -7), view.value(2));
+
+    const overflow_args = [_]compute.Datum{
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int64 = {} },
+            .value = .{ .i64 = std.math.minInt(i64) },
+        }),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int64 = {} },
+            .value = .{ .i64 = 1 },
+        }),
+    };
+    try std.testing.expectError(
+        error.Overflow,
+        ctx.invokeVector("subtract_i64", overflow_args[0..], .{
+            .arithmetic = .{ .check_overflow = true },
+        }),
+    );
+
+    var wrapped = try ctx.invokeVector("subtract_i64", overflow_args[0..], .{
+        .arithmetic = .{ .check_overflow = false },
+    });
+    defer wrapped.release();
+    try std.testing.expect(wrapped.isArray());
+    const wrapped_view = zcore.Int64Array{ .data = wrapped.array.data() };
+    try std.testing.expectEqual(@as(usize, 1), wrapped_view.len());
+    try std.testing.expectEqual(std.math.minInt(i64) -% @as(i64, 1), wrapped_view.value(0));
+}
+
 test "divide_i64 maps divide-by-zero behavior to options" {
     const allocator = std.testing.allocator;
     var registry = compute.FunctionRegistry.init(allocator);
@@ -439,6 +605,67 @@ test "divide_i64 maps divide-by-zero behavior to options" {
     const view = zcore.Int64Array{ .data = out.array.data() };
     try std.testing.expectEqual(@as(usize, 1), view.len());
     try std.testing.expectEqual(@as(i64, 0), view.value(0));
+}
+
+test "multiply_i64 supports null propagation and overflow behavior" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var lhs = try makeInt64Array(allocator, &[_]?i64{ 2, null, -3 });
+    defer lhs.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(lhs.retain()),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int64 = {} },
+            .value = .{ .i64 = 4 },
+        }),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("multiply_i64", args[0..], .{ .arithmetic = .{} });
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    const view = zcore.Int64Array{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), view.len());
+    try std.testing.expectEqual(@as(i64, 8), view.value(0));
+    try std.testing.expect(view.isNull(1));
+    try std.testing.expectEqual(@as(i64, -12), view.value(2));
+
+    const overflow_args = [_]compute.Datum{
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int64 = {} },
+            .value = .{ .i64 = std.math.maxInt(i64) },
+        }),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int64 = {} },
+            .value = .{ .i64 = 2 },
+        }),
+    };
+    try std.testing.expectError(
+        error.Overflow,
+        ctx.invokeVector("multiply_i64", overflow_args[0..], .{
+            .arithmetic = .{ .check_overflow = true },
+        }),
+    );
+
+    var wrapped = try ctx.invokeVector("multiply_i64", overflow_args[0..], .{
+        .arithmetic = .{ .check_overflow = false },
+    });
+    defer wrapped.release();
+    try std.testing.expect(wrapped.isArray());
+    const wrapped_view = zcore.Int64Array{ .data = wrapped.array.data() };
+    try std.testing.expectEqual(@as(usize, 1), wrapped_view.len());
+    try std.testing.expectEqual(std.math.maxInt(i64) *% @as(i64, 2), wrapped_view.value(0));
 }
 
 test "cast_i64_to_i32 enforces safe cast mode" {

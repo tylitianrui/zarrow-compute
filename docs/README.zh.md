@@ -6,7 +6,9 @@
 ## 当前已实现
 
 - `add_i64`（vector）
+- `subtract_i64`（vector）
 - `divide_i64`（vector）
+- `multiply_i64`（vector）
 - `cast_i64_to_i32`（vector）
 - `count_rows`（aggregate，含 stateful lifecycle）
 
@@ -14,13 +16,15 @@
 
 ```bash
 zig build test
-zig build example-basic
+zig build examples
 ```
 
-示例输出（`zig build example-basic`）：
+示例输出（`zig build examples`）：
 
 ```text
 add_i64 => [6, null, 8]
+subtract_i64 => [-4, null, -2]
+multiply_i64 => [5, null, 15]
 count_rows => 3
 ```
 
@@ -30,3 +34,5 @@ count_rows => 3
   <https://github.com/tylitianrui/zarrow/blob/master/docs/compute-api-zh.md>
 - 本仓库 Compute 说明：  
   [compute-api-zh.md](./compute-api-zh.md)
+- Apache Arrow Compute 规范与实现梳理（开发参考）：  
+  [apache-compute-dev-reference.zh.md](./apache-compute-dev-reference.zh.md)

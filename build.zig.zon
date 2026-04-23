@@ -1,12 +1,12 @@
 .{
     .name = .zarrow_compute,
-    .version = "0.1.0",
+    .version = "0.0.1",
     .fingerprint = 0x1418c192b87acf1, // Changing this has security and trust implications.
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.15.1",
     .dependencies = .{
         .zarrow = .{
-            .url = "https://github.com/tylitianrui/zarrow/archive/0a232c5adff002b6f3e8be138b0725b866722e72.tar.gz",
-            .hash = "zarrow-0.0.1-I8BLE1Y0SQDxfPMmYgaazm-61tgDD-7VOl2BV4T15r3P",
+            .url = "https://github.com/tylitianrui/zarrow/archive/refs/tags/v0.0.2.tar.gz",
+            .hash = "zarrow-0.0.2-I8BLE_t2SgCeAXzMmaAo33saipJ0tCheMQJez1nRk4n2",
         },
     },
     .paths = .{

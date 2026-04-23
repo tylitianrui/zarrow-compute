@@ -29,25 +29,59 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run zarrow-compute tests");
     test_step.dependOn(&run_tests.step);
 
-    const example_mod = b.createModule(.{
-        .root_source_file = b.path("examples/basic_compute.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "zarrow_compute", .module = compute_mod },
-            .{ .name = "zarrow-core", .module = zarrow_core_mod },
-        },
-    });
-    const example = b.addExecutable(.{
-        .name = "example-basic-compute",
-        .root_module = example_mod,
-    });
-    const run_example = b.addRunArtifact(example);
-    if (b.args) |args| run_example.addArgs(args);
+    const examples_step = b.step("examples", "Run all compute examples");
+    var basic_example_run_step: ?*std.Build.Step = null;
 
-    const example_step = b.step("example-basic", "Run compute example");
-    example_step.dependOn(&run_example.step);
+    var examples_dir = std.fs.cwd().openDir("examples", .{ .iterate = true }) catch |err| {
+        std.log.err("failed to open examples directory: {s}", .{@errorName(err)});
+        return;
+    };
+    defer examples_dir.close();
 
-    const run_step = b.step("run", "Run compute example");
-    run_step.dependOn(&run_example.step);
+    var iter = examples_dir.iterate();
+    while (iter.next() catch |err| {
+        std.log.err("failed to iterate examples directory: {s}", .{@errorName(err)});
+        return;
+    }) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
+
+        const source_rel = b.fmt("examples/{s}", .{entry.name});
+        const source_stem = std.fs.path.stem(entry.name);
+        const step_name = b.fmt("example-{s}", .{source_stem});
+        const exe_name = b.fmt("example-{s}", .{source_stem});
+        const step_desc = b.fmt("Run {s}", .{source_rel});
+
+        const example_mod = b.createModule(.{
+            .root_source_file = b.path(source_rel),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zarrow_compute", .module = compute_mod },
+                .{ .name = "zarrow-core", .module = zarrow_core_mod },
+            },
+        });
+        const example = b.addExecutable(.{
+            .name = exe_name,
+            .root_module = example_mod,
+        });
+        const run_example = b.addRunArtifact(example);
+        if (b.args) |args| run_example.addArgs(args);
+
+        const single_example_step = b.step(step_name, step_desc);
+        single_example_step.dependOn(&run_example.step);
+        examples_step.dependOn(&run_example.step);
+
+        if (std.mem.eql(u8, entry.name, "basic_compute.zig")) {
+            basic_example_run_step = &run_example.step;
+        }
+    }
+
+    if (basic_example_run_step) |step| {
+        const basic_step = b.step("example-basic", "Run compute example");
+        basic_step.dependOn(step);
+    }
+
+    const run_step = b.step("run", "Run all compute examples");
+    run_step.dependOn(examples_step);
 }

@@ -19,6 +19,23 @@ fn makeInt64Array(allocator: std.mem.Allocator, values: []const ?i64) !zcore.Arr
     return builder.finish();
 }
 
+fn printInt64DatumLine(label: []const u8, datum: compute.Datum) !void {
+    if (!datum.isArray()) return error.InvalidInput;
+    const view = zcore.Int64Array{ .data = datum.array.data() };
+    std.debug.print("{s} => [", .{label});
+    var i: usize = 0;
+    while (i < view.len()) : (i += 1) {
+        if (i != 0) std.debug.print(", ", .{});
+        if (view.isNull(i)) {
+            std.debug.print("null", .{});
+        } else {
+            const value = view.value(i) catch return error.InvalidInput;
+            std.debug.print("{d}", .{value});
+        }
+    }
+    std.debug.print("]\n", .{});
+}
+
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
     var registry = compute.FunctionRegistry.init(allocator);
@@ -45,21 +62,17 @@ pub fn main() !void {
         d.release();
     }
 
-    var out = try ctx.invokeVector("add_i64", args[0..], .{ .arithmetic = .{} });
-    defer out.release();
+    var add_out = try ctx.invokeVector("add_i64", args[0..], .{ .arithmetic = .{} });
+    defer add_out.release();
+    try printInt64DatumLine("add_i64", add_out);
 
-    const view = zcore.Int64Array{ .data = out.array.data() };
-    std.debug.print("add_i64 => [", .{});
-    var i: usize = 0;
-    while (i < view.len()) : (i += 1) {
-        if (i != 0) std.debug.print(", ", .{});
-        if (view.isNull(i)) {
-            std.debug.print("null", .{});
-        } else {
-            std.debug.print("{d}", .{view.value(i)});
-        }
-    }
-    std.debug.print("]\n", .{});
+    var subtract_out = try ctx.invokeVector("subtract_i64", args[0..], .{ .arithmetic = .{} });
+    defer subtract_out.release();
+    try printInt64DatumLine("subtract_i64", subtract_out);
+
+    var multiply_out = try ctx.invokeVector("multiply_i64", args[0..], .{ .arithmetic = .{} });
+    defer multiply_out.release();
+    try printInt64DatumLine("multiply_i64", multiply_out);
 
     var count = try ctx.invokeAggregate("count_rows", args[0..1], compute.Options.noneValue());
     defer count.release();

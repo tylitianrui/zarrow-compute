@@ -13,7 +13,9 @@
 ## 2. 当前已实现的 kernels
 
 - `add_i64`（vector）
+- `subtract_i64`（vector）
 - `divide_i64`（vector）
+- `multiply_i64`（vector）
 - `cast_i64_to_i32`（vector）
 - `count_rows`（aggregate，支持 lifecycle）
 
@@ -42,7 +44,8 @@
 
 本仓库中：
 
-- `add_i64`、`divide_i64` 仅接受 `Options.arithmetic`
+- `add_i64`、`subtract_i64`、`divide_i64` 仅接受 `Options.arithmetic`
+- `multiply_i64` 仅接受 `Options.arithmetic`
 - `cast_i64_to_i32` 仅接受 `Options.cast`
 - `count_rows` 仅接受 `Options.none`
 
@@ -72,7 +75,7 @@
 - `compute.UnaryExecChunkIterator`
 - `chunk.binaryNullAt(i)` / `chunk.unaryNullAt(i)`
 
-这也是当前 `add_i64`、`divide_i64`、`cast_i64_to_i32` 的实现方式。
+这也是当前 `add_i64`、`subtract_i64`、`divide_i64`、`multiply_i64`、`cast_i64_to_i32` 的实现方式。
 
 ## 7. 聚合生命周期（count_rows）
 
@@ -94,12 +97,12 @@
 请运行：
 
 ```bash
-zig build example-basic
+zig build examples
 ```
 
 示例会展示：
 
-- `add_i64` 的 null 传播行为
+- `add_i64` / `subtract_i64` / `multiply_i64` 的 null 传播行为
 - `count_rows` 的聚合结果
 
 ## 9. 测试
@@ -109,4 +112,3 @@ zig build example-basic
 ```bash
 zig build test
 ```
-
