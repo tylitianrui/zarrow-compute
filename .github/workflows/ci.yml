@@ -33,6 +33,9 @@ jobs:
       - name: Zig Version
         run: zig version
 
+      - name: Lint (zig fmt check)
+        run: zig fmt --check build.zig src examples
+
       - name: Run Tests
         run: zig build test
 
