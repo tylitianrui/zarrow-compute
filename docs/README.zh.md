@@ -6,7 +6,7 @@
 ## 当前已实现
 
 - `add_i64`（vector）
-- `filter`（vector，`int64` values + `bool` predicate，使用 `Options.filter`）
+- `filter`（vector，支持 `null/bool/定长类型/string/binary` values + `bool` predicate，使用 `Options.filter`）
 - `subtract_i64`（vector）
 - `divide_i64`（vector）
 - `multiply_i64`（vector）
@@ -26,6 +26,7 @@ zig build examples
 add_i64 => [6, null, 8]
 subtract_i64 => [-4, null, -2]
 multiply_i64 => [5, null, 15]
+filter => [1, null, null]
 count_rows => 3
 ```
 

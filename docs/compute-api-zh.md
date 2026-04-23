@@ -13,7 +13,7 @@
 ## 2. 当前已实现的 kernels
 
 - `add_i64`（vector）
-- `filter`（vector，`int64` values + `bool` predicate）
+- `filter`（vector，支持 `null/bool/定长类型/string/binary` values + `bool` predicate）
 - `subtract_i64`（vector）
 - `divide_i64`（vector）
 - `multiply_i64`（vector）
@@ -48,6 +48,7 @@
 - `add_i64`、`subtract_i64`、`divide_i64` 仅接受 `Options.arithmetic`
 - `multiply_i64` 仅接受 `Options.arithmetic`
 - `filter` 仅接受 `Options.filter`（`drop_nulls=true` 时丢弃 predicate null；`drop_nulls=false` 时输出 null）
+  - 当前支持值类型：`null`、`bool`、定长 primitive/temporal/decimal/`fixed_size_binary`、`string/large_string/string_view`、`binary/large_binary/binary_view`
 - `cast_i64_to_i32` 仅接受 `Options.cast`
 - `count_rows` 仅接受 `Options.none`
 

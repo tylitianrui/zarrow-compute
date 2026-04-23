@@ -6,7 +6,7 @@ It reuses the compute framework layer (`zarrow-core`) from [`tylitianrui/zarrow`
 ## Implemented Kernels
 
 - `add_i64` (vector)
-- `filter` (vector, int64 values + bool predicate, `Options.filter`)
+- `filter` (vector, supports `null/bool/fixed-width/string/binary` value types + `bool` predicate, `Options.filter`)
 - `subtract_i64` (vector)
 - `divide_i64` (vector)
 - `multiply_i64` (vector)
@@ -26,6 +26,7 @@ Example output (`zig build examples`):
 add_i64 => [6, null, 8]
 subtract_i64 => [-4, null, -2]
 multiply_i64 => [5, null, 15]
+filter => [1, null, null]
 count_rows => 3
 ```
 

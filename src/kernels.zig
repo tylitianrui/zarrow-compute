@@ -1,560 +1,26 @@
 const std = @import("std");
 const zcore = @import("zarrow-core");
-
-pub const compute = zcore.compute;
-
-fn onlyNoOptions(options: compute.Options) bool {
-    return switch (options) {
-        .none => true,
-        else => false,
-    };
-}
-
-fn onlyArithmeticOptions(options: compute.Options) bool {
-    return switch (options) {
-        .arithmetic => true,
-        else => false,
-    };
-}
-
-fn onlyCastOptions(options: compute.Options) bool {
-    return switch (options) {
-        .cast => true,
-        else => false,
-    };
-}
-
-fn onlyFilterOptions(options: compute.Options) bool {
-    return switch (options) {
-        .filter => true,
-        else => false,
-    };
-}
-
-fn unaryInt64(args: []const compute.Datum) bool {
-    return args.len == 1 and args[0].dataType().eql(.{ .int64 = {} });
-}
-
-fn binaryInt64(args: []const compute.Datum) bool {
-    return args.len == 2 and
-        args[0].dataType().eql(.{ .int64 = {} }) and
-        args[1].dataType().eql(.{ .int64 = {} });
-}
-
-fn binaryInt64Bool(args: []const compute.Datum) bool {
-    return args.len == 2 and
-        args[0].dataType().eql(.{ .int64 = {} }) and
-        args[1].dataType().eql(.{ .bool = {} });
-}
-
-fn unaryArrayLike(args: []const compute.Datum) bool {
-    return args.len == 1 and (args[0].isArray() or args[0].isChunked());
-}
-
-fn resultI64(args: []const compute.Datum, options: compute.Options) compute.KernelError!compute.DataType {
-    _ = options;
-    if (args.len == 0) return error.InvalidArity;
-    return .{ .int64 = {} };
-}
-
-fn resultI32(args: []const compute.Datum, options: compute.Options) compute.KernelError!compute.DataType {
-    if (args.len != 1) return error.InvalidArity;
-    return switch (options) {
-        .cast => |cast_opts| blk: {
-            if (cast_opts.to_type) |to_type| {
-                if (!to_type.eql(.{ .int32 = {} })) return error.InvalidCast;
-            }
-            break :blk .{ .int32 = {} };
-        },
-        else => error.InvalidOptions,
-    };
-}
-
-fn kernelAppendError(err: anyerror) compute.KernelError {
-    return switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        else => error.InvalidInput,
-    };
-}
-
-fn readI64(value: compute.ExecChunkValue, logical_index: usize) compute.KernelError!i64 {
-    return switch (value) {
-        .scalar => |s| switch (s.value) {
-            .i64 => |v| v,
-            else => error.InvalidInput,
-        },
-        .array => |arr| blk: {
-            const dt = arr.data().data_type;
-            if (dt.eql(.{ .int64 = {} })) {
-                const view = zcore.Int64Array{ .data = arr.data() };
-                break :blk view.value(logical_index) catch return error.InvalidInput;
-            }
-            if (dt.eql(.{ .int32 = {} })) {
-                const view = zcore.Int32Array{ .data = arr.data() };
-                const v = view.value(logical_index) catch return error.InvalidInput;
-                break :blk @as(i64, v);
-            }
-            break :blk error.UnsupportedType;
-        },
-    };
-}
-
-fn readBool(value: compute.ExecChunkValue, logical_index: usize) compute.KernelError!bool {
-    return switch (value) {
-        .scalar => |s| switch (s.value) {
-            .bool => |v| v,
-            else => error.InvalidInput,
-        },
-        .array => |arr| blk: {
-            const dt = arr.data().data_type;
-            if (!dt.eql(.{ .bool = {} })) break :blk error.UnsupportedType;
-            const view = zcore.BooleanArray{ .data = arr.data() };
-            break :blk view.value(logical_index);
-        },
-    };
-}
-
-fn addI64Kernel(
-    ctx: *compute.ExecContext,
-    args: []const compute.Datum,
-    options: compute.Options,
-) compute.KernelError!compute.Datum {
-    if (args.len != 2) return error.InvalidArity;
-    const arithmetic_opts = switch (options) {
-        .arithmetic => |o| o,
-        else => return error.InvalidOptions,
-    };
-
-    const out_len = try compute.inferBinaryExecLen(args[0], args[1]);
-    var builder = try zcore.Int64Builder.init(ctx.tempAllocator(), out_len);
-    defer builder.deinit();
-
-    var iter = try compute.BinaryExecChunkIterator.init(args[0], args[1]);
-    while (try iter.next()) |chunk_value| {
-        var chunk = chunk_value;
-        defer chunk.deinit();
-
-        var i: usize = 0;
-        while (i < chunk.len) : (i += 1) {
-            if (chunk.binaryNullAt(i)) {
-                builder.appendNull() catch |err| return kernelAppendError(err);
-                continue;
-            }
-
-            const lhs = try readI64(chunk.lhs, i);
-            const rhs = try readI64(chunk.rhs, i);
-            const sum = if (arithmetic_opts.check_overflow)
-                std.math.add(i64, lhs, rhs) catch return error.Overflow
-            else
-                lhs +% rhs;
-
-            builder.append(sum) catch |err| return kernelAppendError(err);
-        }
-    }
-
-    const out = builder.finish() catch |err| return kernelAppendError(err);
-    return compute.Datum.fromArray(out);
-}
-
-fn filterI64Kernel(
-    ctx: *compute.ExecContext,
-    args: []const compute.Datum,
-    options: compute.Options,
-) compute.KernelError!compute.Datum {
-    if (args.len != 2) return error.InvalidArity;
-    const filter_opts = switch (options) {
-        .filter => |o| o,
-        else => return error.InvalidOptions,
-    };
-
-    const input_len = try compute.inferBinaryExecLen(args[0], args[1]);
-    var builder = try zcore.Int64Builder.init(ctx.tempAllocator(), input_len);
-    defer builder.deinit();
-
-    var iter = try compute.BinaryExecChunkIterator.init(args[0], args[1]);
-    while (try iter.next()) |chunk_value| {
-        var chunk = chunk_value;
-        defer chunk.deinit();
-
-        var i: usize = 0;
-        while (i < chunk.len) : (i += 1) {
-            if (chunk.rhs.isNullAt(i)) {
-                if (filter_opts.drop_nulls) continue;
-                builder.appendNull() catch |err| return kernelAppendError(err);
-                continue;
-            }
-
-            const keep = try readBool(chunk.rhs, i);
-            if (!keep) continue;
-
-            if (chunk.lhs.isNullAt(i)) {
-                builder.appendNull() catch |err| return kernelAppendError(err);
-                continue;
-            }
-
-            const value = try readI64(chunk.lhs, i);
-            builder.append(value) catch |err| return kernelAppendError(err);
-        }
-    }
-
-    const out = builder.finish() catch |err| return kernelAppendError(err);
-    return compute.Datum.fromArray(out);
-}
-
-fn subtractI64Kernel(
-    ctx: *compute.ExecContext,
-    args: []const compute.Datum,
-    options: compute.Options,
-) compute.KernelError!compute.Datum {
-    if (args.len != 2) return error.InvalidArity;
-    const arithmetic_opts = switch (options) {
-        .arithmetic => |o| o,
-        else => return error.InvalidOptions,
-    };
-
-    const out_len = try compute.inferBinaryExecLen(args[0], args[1]);
-    var builder = try zcore.Int64Builder.init(ctx.tempAllocator(), out_len);
-    defer builder.deinit();
-
-    var iter = try compute.BinaryExecChunkIterator.init(args[0], args[1]);
-    while (try iter.next()) |chunk_value| {
-        var chunk = chunk_value;
-        defer chunk.deinit();
-
-        var i: usize = 0;
-        while (i < chunk.len) : (i += 1) {
-            if (chunk.binaryNullAt(i)) {
-                builder.appendNull() catch |err| return kernelAppendError(err);
-                continue;
-            }
-
-            const lhs = try readI64(chunk.lhs, i);
-            const rhs = try readI64(chunk.rhs, i);
-            const diff = if (arithmetic_opts.check_overflow)
-                std.math.sub(i64, lhs, rhs) catch return error.Overflow
-            else
-                lhs -% rhs;
-
-            builder.append(diff) catch |err| return kernelAppendError(err);
-        }
-    }
-
-    const out = builder.finish() catch |err| return kernelAppendError(err);
-    return compute.Datum.fromArray(out);
-}
-
-fn multiplyI64Kernel(
-    ctx: *compute.ExecContext,
-    args: []const compute.Datum,
-    options: compute.Options,
-) compute.KernelError!compute.Datum {
-    if (args.len != 2) return error.InvalidArity;
-    const arithmetic_opts = switch (options) {
-        .arithmetic => |o| o,
-        else => return error.InvalidOptions,
-    };
-
-    const out_len = try compute.inferBinaryExecLen(args[0], args[1]);
-    var builder = try zcore.Int64Builder.init(ctx.tempAllocator(), out_len);
-    defer builder.deinit();
-
-    var iter = try compute.BinaryExecChunkIterator.init(args[0], args[1]);
-    while (try iter.next()) |chunk_value| {
-        var chunk = chunk_value;
-        defer chunk.deinit();
-
-        var i: usize = 0;
-        while (i < chunk.len) : (i += 1) {
-            if (chunk.binaryNullAt(i)) {
-                builder.appendNull() catch |err| return kernelAppendError(err);
-                continue;
-            }
-
-            const lhs = try readI64(chunk.lhs, i);
-            const rhs = try readI64(chunk.rhs, i);
-            const product = if (arithmetic_opts.check_overflow)
-                std.math.mul(i64, lhs, rhs) catch return error.Overflow
-            else
-                lhs *% rhs;
-
-            builder.append(product) catch |err| return kernelAppendError(err);
-        }
-    }
-
-    const out = builder.finish() catch |err| return kernelAppendError(err);
-    return compute.Datum.fromArray(out);
-}
-
-fn divideI64Kernel(
-    ctx: *compute.ExecContext,
-    args: []const compute.Datum,
-    options: compute.Options,
-) compute.KernelError!compute.Datum {
-    if (args.len != 2) return error.InvalidArity;
-    const arithmetic_opts = switch (options) {
-        .arithmetic => |o| o,
-        else => return error.InvalidOptions,
-    };
-
-    const out_len = try compute.inferBinaryExecLen(args[0], args[1]);
-    var builder = try zcore.Int64Builder.init(ctx.tempAllocator(), out_len);
-    defer builder.deinit();
-
-    var iter = try compute.BinaryExecChunkIterator.init(args[0], args[1]);
-    while (try iter.next()) |chunk_value| {
-        var chunk = chunk_value;
-        defer chunk.deinit();
-
-        var i: usize = 0;
-        while (i < chunk.len) : (i += 1) {
-            if (chunk.binaryNullAt(i)) {
-                builder.appendNull() catch |err| return kernelAppendError(err);
-                continue;
-            }
-
-            const lhs = try readI64(chunk.lhs, i);
-            const rhs = try readI64(chunk.rhs, i);
-            const out = try compute.arithmeticDivI64(lhs, rhs, arithmetic_opts);
-
-            builder.append(out) catch |err| return kernelAppendError(err);
-        }
-    }
-
-    const out = builder.finish() catch |err| return kernelAppendError(err);
-    return compute.Datum.fromArray(out);
-}
-
-fn castI64ToI32Kernel(
-    ctx: *compute.ExecContext,
-    args: []const compute.Datum,
-    options: compute.Options,
-) compute.KernelError!compute.Datum {
-    if (args.len != 1) return error.InvalidArity;
-    const cast_opts = switch (options) {
-        .cast => |o| o,
-        else => return error.InvalidOptions,
-    };
-    if (cast_opts.to_type) |to_type| {
-        if (!to_type.eql(.{ .int32 = {} })) return error.InvalidCast;
-    }
-
-    const out_len: usize = switch (args[0]) {
-        .array => |arr| arr.data().length,
-        .chunked => |chunks| chunks.len(),
-        .scalar => 1,
-    };
-
-    var builder = try zcore.Int32Builder.init(ctx.tempAllocator(), out_len);
-    defer builder.deinit();
-
-    var iter = compute.UnaryExecChunkIterator.init(args[0]);
-    while (try iter.next()) |chunk_value| {
-        var chunk = chunk_value;
-        defer chunk.deinit();
-
-        var i: usize = 0;
-        while (i < chunk.len) : (i += 1) {
-            if (chunk.unaryNullAt(i)) {
-                builder.appendNull() catch |err| return kernelAppendError(err);
-                continue;
-            }
-
-            const value_i64 = try readI64(chunk.values, i);
-            const casted: i32 = if (cast_opts.safe)
-                try compute.intCastOrInvalidCast(i32, value_i64)
-            else
-                @as(i32, @truncate(value_i64));
-
-            builder.append(casted) catch |err| return kernelAppendError(err);
-        }
-    }
-
-    const out = builder.finish() catch |err| return kernelAppendError(err);
-    return compute.Datum.fromArray(out);
-}
-
-fn countRowsResultType(args: []const compute.Datum, options: compute.Options) compute.KernelError!compute.DataType {
-    _ = options;
-    if (args.len != 1) return error.InvalidArity;
-    return .{ .int64 = {} };
-}
-
-fn countRows(datum: compute.Datum) compute.KernelError!usize {
-    return switch (datum) {
-        .array => |arr| arr.data().length,
-        .chunked => |chunks| chunks.len(),
-        .scalar => error.InvalidInput,
-    };
-}
-
-fn countRowsKernel(
-    ctx: *compute.ExecContext,
-    args: []const compute.Datum,
-    options: compute.Options,
-) compute.KernelError!compute.Datum {
-    _ = ctx;
-    if (!onlyNoOptions(options)) return error.InvalidOptions;
-    if (!unaryArrayLike(args)) return error.InvalidInput;
-    const row_count = try countRows(args[0]);
-    return compute.Datum.fromScalar(.{
-        .data_type = .{ .int64 = {} },
-        .value = .{ .i64 = @intCast(row_count) },
-    });
-}
-
-const CountRowsState = struct {
-    count: usize = 0,
-};
-
-fn countRowsInit(ctx: *compute.ExecContext, options: compute.Options) compute.KernelError!*anyopaque {
-    if (!onlyNoOptions(options)) return error.InvalidOptions;
-    const state = ctx.allocator.create(CountRowsState) catch return error.OutOfMemory;
-    state.* = .{};
-    return state;
-}
-
-fn countRowsUpdate(
-    ctx: *compute.ExecContext,
-    state_ptr: *anyopaque,
-    args: []const compute.Datum,
-    options: compute.Options,
-) compute.KernelError!void {
-    _ = ctx;
-    if (!onlyNoOptions(options)) return error.InvalidOptions;
-    if (!unaryArrayLike(args)) return error.InvalidInput;
-
-    const state: *CountRowsState = @ptrCast(@alignCast(state_ptr));
-    const next_rows = try countRows(args[0]);
-    state.count = std.math.add(usize, state.count, next_rows) catch return error.Overflow;
-}
-
-fn countRowsMerge(
-    ctx: *compute.ExecContext,
-    state_ptr: *anyopaque,
-    other_ptr: *anyopaque,
-    options: compute.Options,
-) compute.KernelError!void {
-    _ = ctx;
-    if (!onlyNoOptions(options)) return error.InvalidOptions;
-    const state: *CountRowsState = @ptrCast(@alignCast(state_ptr));
-    const other: *CountRowsState = @ptrCast(@alignCast(other_ptr));
-    state.count = std.math.add(usize, state.count, other.count) catch return error.Overflow;
-}
-
-fn countRowsFinalize(
-    ctx: *compute.ExecContext,
-    state_ptr: *anyopaque,
-    options: compute.Options,
-) compute.KernelError!compute.Datum {
-    _ = ctx;
-    if (!onlyNoOptions(options)) return error.InvalidOptions;
-    const state: *CountRowsState = @ptrCast(@alignCast(state_ptr));
-    return compute.Datum.fromScalar(.{
-        .data_type = .{ .int64 = {} },
-        .value = .{ .i64 = @intCast(state.count) },
-    });
-}
-
-fn countRowsDeinit(ctx: *compute.ExecContext, state_ptr: *anyopaque) void {
-    const state: *CountRowsState = @ptrCast(@alignCast(state_ptr));
-    ctx.allocator.destroy(state);
-}
-
-pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelError!void {
-    try registry.registerVectorKernel("add_i64", .{
-        .signature = .{
-            .arity = 2,
-            .type_check = binaryInt64,
-            .options_check = onlyArithmeticOptions,
-            .result_type_fn = resultI64,
-        },
-        .exec = addI64Kernel,
-    });
-
-    try registry.registerVectorKernel("filter", .{
-        .signature = .{
-            .arity = 2,
-            .type_check = binaryInt64Bool,
-            .options_check = onlyFilterOptions,
-            .result_type_fn = resultI64,
-        },
-        .exec = filterI64Kernel,
-    });
-
-    try registry.registerVectorKernel("filter_i64", .{
-        .signature = .{
-            .arity = 2,
-            .type_check = binaryInt64Bool,
-            .options_check = onlyFilterOptions,
-            .result_type_fn = resultI64,
-        },
-        .exec = filterI64Kernel,
-    });
-
-    try registry.registerVectorKernel("subtract_i64", .{
-        .signature = .{
-            .arity = 2,
-            .type_check = binaryInt64,
-            .options_check = onlyArithmeticOptions,
-            .result_type_fn = resultI64,
-        },
-        .exec = subtractI64Kernel,
-    });
-
-    try registry.registerVectorKernel("divide_i64", .{
-        .signature = .{
-            .arity = 2,
-            .type_check = binaryInt64,
-            .options_check = onlyArithmeticOptions,
-            .result_type_fn = resultI64,
-        },
-        .exec = divideI64Kernel,
-    });
-
-    try registry.registerVectorKernel("multiply_i64", .{
-        .signature = .{
-            .arity = 2,
-            .type_check = binaryInt64,
-            .options_check = onlyArithmeticOptions,
-            .result_type_fn = resultI64,
-        },
-        .exec = multiplyI64Kernel,
-    });
-
-    try registry.registerVectorKernel("cast_i64_to_i32", .{
-        .signature = .{
-            .arity = 1,
-            .type_check = unaryInt64,
-            .options_check = onlyCastOptions,
-            .result_type_fn = resultI32,
-        },
-        .exec = castI64ToI32Kernel,
-    });
-
-    try registry.registerAggregateKernel("count_rows", .{
-        .signature = .{
-            .arity = 1,
-            .type_check = unaryArrayLike,
-            .options_check = onlyNoOptions,
-            .result_type_fn = countRowsResultType,
-        },
-        .exec = countRowsKernel,
-        .aggregate_lifecycle = .{
-            .init = countRowsInit,
-            .update = countRowsUpdate,
-            .merge = countRowsMerge,
-            .finalize = countRowsFinalize,
-            .deinit = countRowsDeinit,
-        },
-    });
-}
-
-pub fn registerCompatKernels(registry: *compute.FunctionRegistry) compute.KernelError!void {
-    return registerBaseKernels(registry);
-}
+const impl = @import("kernels/impl.zig");
+
+pub const compute = impl.compute;
+pub const registerBaseKernels = impl.registerBaseKernels;
+pub const registerCompatKernels = impl.registerCompatKernels;
 
 fn makeInt64Array(allocator: std.mem.Allocator, values: []const ?i64) !zcore.ArrayRef {
     var builder = try zcore.Int64Builder.init(allocator, values.len);
+    defer builder.deinit();
+    for (values) |v| {
+        if (v) |x| {
+            try builder.append(x);
+        } else {
+            try builder.appendNull();
+        }
+    }
+    return builder.finish();
+}
+
+fn makeInt32Array(allocator: std.mem.Allocator, values: []const ?i32) !zcore.ArrayRef {
+    var builder = try zcore.Int32Builder.init(allocator, values.len);
     defer builder.deinit();
     for (values) |v| {
         if (v) |x| {
@@ -577,6 +43,127 @@ fn makeBoolArray(allocator: std.mem.Allocator, values: []const ?bool) !zcore.Arr
         }
     }
     return builder.finish();
+}
+
+fn makeStringArray(allocator: std.mem.Allocator, values: []const ?[]const u8) !zcore.ArrayRef {
+    var data_capacity: usize = 0;
+    for (values) |v| {
+        if (v) |x| data_capacity += x.len;
+    }
+    var builder = try zcore.StringBuilder.init(allocator, values.len, data_capacity);
+    defer builder.deinit();
+    for (values) |v| {
+        if (v) |x| {
+            try builder.append(x);
+        } else {
+            try builder.appendNull();
+        }
+    }
+    return builder.finish();
+}
+
+fn makeLargeStringArray(allocator: std.mem.Allocator, values: []const ?[]const u8) !zcore.ArrayRef {
+    var data_capacity: usize = 0;
+    for (values) |v| {
+        if (v) |x| data_capacity += x.len;
+    }
+    var builder = try zcore.LargeStringBuilder.init(allocator, values.len, data_capacity);
+    defer builder.deinit();
+    for (values) |v| {
+        if (v) |x| {
+            try builder.append(x);
+        } else {
+            try builder.appendNull();
+        }
+    }
+    return builder.finish();
+}
+
+fn makeBinaryArray(allocator: std.mem.Allocator, values: []const ?[]const u8) !zcore.ArrayRef {
+    var data_capacity: usize = 0;
+    for (values) |v| {
+        if (v) |x| data_capacity += x.len;
+    }
+    var builder = try zcore.BinaryBuilder.init(allocator, values.len, data_capacity);
+    defer builder.deinit();
+    for (values) |v| {
+        if (v) |x| {
+            try builder.append(x);
+        } else {
+            try builder.appendNull();
+        }
+    }
+    return builder.finish();
+}
+
+fn makeStringViewArray(allocator: std.mem.Allocator, values: []const ?[]const u8) !zcore.ArrayRef {
+    var data_capacity: usize = 0;
+    for (values) |v| {
+        if (v) |x| data_capacity += x.len;
+    }
+    var builder = try zcore.StringViewBuilder.init(allocator, values.len, data_capacity);
+    defer builder.deinit();
+    for (values) |v| {
+        if (v) |x| {
+            try builder.append(x);
+        } else {
+            try builder.appendNull();
+        }
+    }
+    return builder.finish();
+}
+
+fn makeBinaryViewArray(allocator: std.mem.Allocator, values: []const ?[]const u8) !zcore.ArrayRef {
+    var data_capacity: usize = 0;
+    for (values) |v| {
+        if (v) |x| data_capacity += x.len;
+    }
+    var builder = try zcore.BinaryViewBuilder.init(allocator, values.len, data_capacity);
+    defer builder.deinit();
+    for (values) |v| {
+        if (v) |x| {
+            try builder.append(x);
+        } else {
+            try builder.appendNull();
+        }
+    }
+    return builder.finish();
+}
+
+fn makeFixedSizeBinaryArray(allocator: std.mem.Allocator, byte_width: usize, values: []const ?[]const u8) !zcore.ArrayRef {
+    var builder = try zcore.FixedSizeBinaryBuilder.init(allocator, byte_width, values.len);
+    defer builder.deinit();
+    for (values) |v| {
+        if (v) |x| {
+            try builder.append(x);
+        } else {
+            try builder.appendNull();
+        }
+    }
+    return builder.finish();
+}
+
+fn makeListInt32Array(allocator: std.mem.Allocator) !zcore.ArrayRef {
+    const value_type = zcore.DataType{ .int32 = {} };
+    const field = zcore.Field{
+        .name = "item",
+        .data_type = &value_type,
+        .nullable = true,
+    };
+
+    var values_builder = try zcore.Int32Builder.init(allocator, 3);
+    defer values_builder.deinit();
+    try values_builder.append(1);
+    try values_builder.append(2);
+    try values_builder.append(3);
+    var values = try values_builder.finish();
+    defer values.release();
+
+    var list_builder = try zcore.ListBuilder.init(allocator, 2, field);
+    defer list_builder.deinit();
+    try list_builder.appendLen(2);
+    try list_builder.appendLen(1);
+    return list_builder.finish(values);
 }
 
 test "add_i64 supports scalar broadcast and null propagation" {
@@ -687,6 +274,395 @@ test "filter emits null for null predicate when drop_nulls is false" {
     try std.testing.expectEqual(@as(i64, 7), view.value(0));
     try std.testing.expect(view.isNull(1));
     try std.testing.expectEqual(@as(i64, 9), view.value(2));
+}
+
+test "filter supports int32 value arrays with bool predicate" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeInt32Array(allocator, &[_]?i32{ 10, null, 20, 30 });
+    defer values.release();
+    var predicate = try makeBoolArray(allocator, &[_]?bool{ true, true, false, true });
+    defer predicate.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromArray(predicate.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("filter", args[0..], .{ .filter = .{} });
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .int32 = {} }));
+
+    const view = zcore.Int32Array{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), view.len());
+    try std.testing.expectEqual(@as(i32, 10), try view.value(0));
+    try std.testing.expect(view.isNull(1));
+    try std.testing.expectEqual(@as(i32, 30), try view.value(2));
+}
+
+test "filter supports bool value arrays" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeBoolArray(allocator, &[_]?bool{ true, null, false });
+    defer values.release();
+    var predicate = try makeBoolArray(allocator, &[_]?bool{ true, true, true });
+    defer predicate.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromArray(predicate.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("filter", args[0..], .{ .filter = .{} });
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .bool = {} }));
+
+    const view = zcore.BooleanArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), view.len());
+    try std.testing.expect(view.value(0));
+    try std.testing.expect(view.isNull(1));
+    try std.testing.expect(!view.value(2));
+}
+
+test "filter supports string scalar broadcast and predicate null emission" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var predicate = try makeBoolArray(allocator, &[_]?bool{ true, false, null, true });
+    defer predicate.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .string = {} },
+            .value = .{ .string = "x" },
+        }),
+        compute.Datum.fromArray(predicate.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("filter", args[0..], .{
+        .filter = .{ .drop_nulls = false },
+    });
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .string = {} }));
+
+    const view = zcore.StringArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), view.len());
+    try std.testing.expect(std.mem.eql(u8, view.value(0), "x"));
+    try std.testing.expect(view.isNull(1));
+    try std.testing.expect(std.mem.eql(u8, view.value(2), "x"));
+}
+
+test "filter supports binary arrays and predicate null emission" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeBinaryArray(allocator, &[_]?[]const u8{ "aa", null, "bb", "cc" });
+    defer values.release();
+    var predicate = try makeBoolArray(allocator, &[_]?bool{ true, true, null, false });
+    defer predicate.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromArray(predicate.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("filter", args[0..], .{
+        .filter = .{ .drop_nulls = false },
+    });
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .binary = {} }));
+
+    const view = zcore.BinaryArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), view.len());
+    try std.testing.expect(std.mem.eql(u8, view.value(0), "aa"));
+    try std.testing.expect(view.isNull(1));
+    try std.testing.expect(view.isNull(2));
+}
+
+test "filter supports large_string value arrays" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeLargeStringArray(allocator, &[_]?[]const u8{ "left", null, "right" });
+    defer values.release();
+    var predicate = try makeBoolArray(allocator, &[_]?bool{ false, true, true });
+    defer predicate.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromArray(predicate.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("filter", args[0..], .{ .filter = .{} });
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .large_string = {} }));
+
+    const view = zcore.LargeStringArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 2), view.len());
+    try std.testing.expect(view.isNull(0));
+    try std.testing.expect(std.mem.eql(u8, view.value(1), "right"));
+}
+
+test "filter supports fixed_size_binary value arrays" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeFixedSizeBinaryArray(allocator, 2, &[_]?[]const u8{ "ab", null, "cd", "ef" });
+    defer values.release();
+    var predicate = try makeBoolArray(allocator, &[_]?bool{ true, true, false, true });
+    defer predicate.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromArray(predicate.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("filter", args[0..], .{ .filter = .{} });
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{
+        .fixed_size_binary = .{ .byte_width = 2 },
+    }));
+
+    const view = zcore.FixedSizeBinaryArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), view.len());
+    try std.testing.expect(std.mem.eql(u8, view.value(0), "ab"));
+    try std.testing.expect(view.isNull(1));
+    try std.testing.expect(std.mem.eql(u8, view.value(2), "ef"));
+}
+
+test "filter supports chunked values and chunked predicates with misaligned chunk boundaries" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values_chunk0 = try makeInt64Array(allocator, &[_]?i64{ 1, null });
+    defer values_chunk0.release();
+    var values_chunk1 = try makeInt64Array(allocator, &[_]?i64{ 3, 4 });
+    defer values_chunk1.release();
+    var values_chunked = try compute.ChunkedArray.init(
+        allocator,
+        .{ .int64 = {} },
+        &[_]zcore.ArrayRef{ values_chunk0, values_chunk1 },
+    );
+    defer values_chunked.release();
+
+    var pred_chunk0 = try makeBoolArray(allocator, &[_]?bool{true});
+    defer pred_chunk0.release();
+    var pred_chunk1 = try makeBoolArray(allocator, &[_]?bool{ true, false, true });
+    defer pred_chunk1.release();
+    var pred_chunked = try compute.ChunkedArray.init(
+        allocator,
+        .{ .bool = {} },
+        &[_]zcore.ArrayRef{ pred_chunk0, pred_chunk1 },
+    );
+    defer pred_chunked.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromChunked(values_chunked.retain()),
+        compute.Datum.fromChunked(pred_chunked.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("filter", args[0..], .{ .filter = .{} });
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .int64 = {} }));
+
+    const view = zcore.Int64Array{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), view.len());
+    try std.testing.expectEqual(@as(i64, 1), view.value(0));
+    try std.testing.expect(view.isNull(1));
+    try std.testing.expectEqual(@as(i64, 4), view.value(2));
+}
+
+test "filter supports string_view value arrays" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeStringViewArray(allocator, &[_]?[]const u8{ "one", null, "two", "three" });
+    defer values.release();
+    var predicate = try makeBoolArray(allocator, &[_]?bool{ true, true, false, true });
+    defer predicate.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromArray(predicate.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("filter", args[0..], .{ .filter = .{} });
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .string_view = {} }));
+
+    const view = zcore.StringViewArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), view.len());
+    try std.testing.expect(std.mem.eql(u8, view.value(0), "one"));
+    try std.testing.expect(view.isNull(1));
+    try std.testing.expect(std.mem.eql(u8, view.value(2), "three"));
+}
+
+test "filter supports binary_view value arrays with predicate null emission" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeBinaryViewArray(allocator, &[_]?[]const u8{ "aa", "bb", null, "cc" });
+    defer values.release();
+    var predicate = try makeBoolArray(allocator, &[_]?bool{ true, null, true, false });
+    defer predicate.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromArray(predicate.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("filter", args[0..], .{
+        .filter = .{ .drop_nulls = false },
+    });
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .binary_view = {} }));
+
+    const view = zcore.BinaryViewArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), view.len());
+    try std.testing.expect(std.mem.eql(u8, view.value(0), "aa"));
+    try std.testing.expect(view.isNull(1));
+    try std.testing.expect(view.isNull(2));
+}
+
+test "filter rejects unsupported nested value type at dispatch" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeListInt32Array(allocator);
+    defer values.release();
+    var predicate = try makeBoolArray(allocator, &[_]?bool{ true, true });
+    defer predicate.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromArray(predicate.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    try std.testing.expectError(
+        error.NoMatchingKernel,
+        ctx.invokeVector("filter", args[0..], .{ .filter = .{} }),
+    );
 }
 
 test "subtract_i64 supports null propagation and overflow behavior" {

@@ -19,6 +19,21 @@ fn makeInt64Array(allocator: std.mem.Allocator, values: []const ?i64) !zcore.Arr
     return builder.finish();
 }
 
+fn makeBoolArray(allocator: std.mem.Allocator, values: []const ?bool) !zcore.ArrayRef {
+    var builder = try zcore.BooleanBuilder.init(allocator, values.len);
+    defer builder.deinit();
+
+    for (values) |v| {
+        if (v) |x| {
+            try builder.append(x);
+        } else {
+            try builder.appendNull();
+        }
+    }
+
+    return builder.finish();
+}
+
 fn printInt64DatumLine(label: []const u8, datum: compute.Datum) !void {
     if (!datum.isArray()) return error.InvalidInput;
     const view = zcore.Int64Array{ .data = datum.array.data() };
@@ -73,6 +88,26 @@ pub fn main() !void {
     var multiply_out = try ctx.invokeVector("multiply_i64", args[0..], .{ .arithmetic = .{} });
     defer multiply_out.release();
     try printInt64DatumLine("multiply_i64", multiply_out);
+
+    var predicate = try makeBoolArray(allocator, &[_]?bool{ true, true, null });
+    defer predicate.release();
+    const filter_args = [_]compute.Datum{
+        compute.Datum.fromArray(left.retain()),
+        compute.Datum.fromArray(predicate.retain()),
+    };
+    defer {
+        var d = filter_args[0];
+        d.release();
+    }
+    defer {
+        var d = filter_args[1];
+        d.release();
+    }
+    var filter_out = try ctx.invokeVector("filter", filter_args[0..], .{
+        .filter = .{ .drop_nulls = false },
+    });
+    defer filter_out.release();
+    try printInt64DatumLine("filter", filter_out);
 
     var count = try ctx.invokeAggregate("count_rows", args[0..1], compute.Options.noneValue());
     defer count.release();

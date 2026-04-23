@@ -12,7 +12,7 @@
   - `multiply`（`multiply_i64`）
   - `divide`（`divide_i64`）
   - `cast`（当前仅 `int64 -> int32`）
-  - `filter`（当前 `int64 values + bool predicate`）
+  - `filter`（当前已覆盖 `null/bool/定长类型/string/binary` 值类型；嵌套/字典等复杂类型待补齐）
 - 非 Arrow 标准函数（仓库自定义）：
   - `count_rows`
 
@@ -334,7 +334,7 @@
 - [ ] `array_filter`
 - [ ] `array_take`
 - [ ] `drop_null`
-- [ ] `filter`（当前 `int64 + bool` 子集）
+- [ ] `filter`（当前已覆盖 `null/bool/定长类型/string/binary` 子集，需补齐复杂类型与更高阶输入语义）
 - [ ] `inverse_permutation`
 - [ ] `scatter`
 - [ ] `take`
