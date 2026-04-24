@@ -14,7 +14,7 @@
 - `if_else`（vector，第一版支持 `fixed-width + string/binary` 子集，使用 `Options.none`）
 - `coalesce`（vector，可变参数，按行选择第一个非 null，使用 `Options.none`）
 - `choose`（vector，可变参数，按 0-based 索引选择值，使用 `Options.none`）
-- `case_when`（vector，主入口为 Arrow 原生 `struct<bool...> + *cases` 且支持可选 else，同时兼容 `cond,value` 可变参数形态，使用 `Options.none`）
+- `case_when`（vector，Arrow 原生 `struct<bool...> + *cases` 且支持可选 else，使用 `Options.none`）
 - `subtract_i64`（vector）
 - `divide_i64`（vector）
 - `multiply_i64`（vector）

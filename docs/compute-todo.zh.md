@@ -265,7 +265,7 @@
 - [ ] `is_null`（当前已实现 array/chunked 输入基础版）
 - [ ] `is_valid`（当前已实现 array/chunked 输入基础版）
 - [ ] `true_unless_null`（当前已实现 array/chunked 输入基础版）
-- [x] `case_when`（当前实现：主入口 Arrow 原生 `struct<bool...> + *cases`（可选 else），并兼容 `cond_i, value_i ... [, else]`；值类型支持 `null/bool/fixed-width/string/binary` 子集）
+- [x] `case_when`（当前实现：Arrow 原生 `struct<bool...> + *cases`（可选 else）；值类型支持 `null/bool/fixed-width/string/binary` 子集）
 - [x] `choose`（当前实现：可变参数 `indices, *values`，`indices` 支持整数类型，值类型支持 `null/bool/fixed-width/string/binary` 子集）
 - [x] `coalesce`（当前实现：可变参数 `*values`，值类型支持 `null/bool/fixed-width/string/binary` 子集）
 - [ ] `if_else`（当前已实现第一版：`fixed-width + string/binary` 子集，`Options.none`，condition null -> output null）

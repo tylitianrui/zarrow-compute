@@ -462,12 +462,12 @@ const SelectionConfig = struct {
     has_else: bool = false,
 };
 
-const CaseWhenCompatArgs = struct {
+const CaseWhenStructArgs = struct {
     allocator: std.mem.Allocator,
     args: []compute.Datum,
     config: SelectionConfig,
 
-    fn deinit(self: *CaseWhenCompatArgs) void {
+    fn deinit(self: *CaseWhenStructArgs) void {
         for (self.args) |*arg| {
             arg.release();
         }
@@ -480,18 +480,6 @@ fn mapSelectionInputError(err: anyerror) compute.KernelError {
     return switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         else => error.InvalidInput,
-    };
-}
-
-fn parseCaseWhenConfig(args: []const compute.Datum) compute.KernelError!SelectionConfig {
-    if (args.len < 2) return error.InvalidArity;
-    const has_else = (args.len % 2) == 1;
-    const case_pair_count = if (has_else) (args.len - 1) / 2 else args.len / 2;
-    if (case_pair_count == 0) return error.InvalidArity;
-    return .{
-        .kind = .case_when,
-        .case_pair_count = case_pair_count,
-        .has_else = has_else,
     };
 }
 
@@ -560,29 +548,29 @@ fn extractCaseWhenStructFieldDatum(
     };
 }
 
-fn buildCaseWhenCompatArgsFromStruct(
+fn buildCaseWhenStructArgs(
     allocator: std.mem.Allocator,
     args: []const compute.Datum,
-) compute.KernelError!CaseWhenCompatArgs {
+) compute.KernelError!CaseWhenStructArgs {
     const config = try parseCaseWhenStructConfig(args);
     const cond_struct = args[0].dataType().struct_;
 
-    const compat_len = config.case_pair_count * 2 + (if (config.has_else) @as(usize, 1) else @as(usize, 0));
-    const compat_args = allocator.alloc(compute.Datum, compat_len) catch return error.OutOfMemory;
+    const pair_args_len = config.case_pair_count * 2 + (if (config.has_else) @as(usize, 1) else @as(usize, 0));
+    const pair_args = allocator.alloc(compute.Datum, pair_args_len) catch return error.OutOfMemory;
     var initialized: usize = 0;
     errdefer {
         while (initialized > 0) {
             initialized -= 1;
-            var datum = compat_args[initialized];
+            var datum = pair_args[initialized];
             datum.release();
         }
-        allocator.free(compat_args);
+        allocator.free(pair_args);
     }
 
     var pair_index: usize = 0;
     while (pair_index < config.case_pair_count) : (pair_index += 1) {
         const cond_arg_index = pair_index * 2;
-        compat_args[cond_arg_index] = try extractCaseWhenStructFieldDatum(
+        pair_args[cond_arg_index] = try extractCaseWhenStructFieldDatum(
             allocator,
             args[0],
             pair_index,
@@ -590,18 +578,18 @@ fn buildCaseWhenCompatArgsFromStruct(
         );
         initialized += 1;
 
-        compat_args[cond_arg_index + 1] = args[pair_index + 1].retain();
+        pair_args[cond_arg_index + 1] = args[pair_index + 1].retain();
         initialized += 1;
     }
 
     if (config.has_else) {
-        compat_args[compat_args.len - 1] = args[args.len - 1].retain();
+        pair_args[pair_args.len - 1] = args[args.len - 1].retain();
         initialized += 1;
     }
 
     return .{
         .allocator = allocator,
-        .args = compat_args,
+        .args = pair_args,
         .config = config,
     };
 }
@@ -1024,11 +1012,7 @@ pub fn caseWhenKernel(
     if (args.len < 2) return error.InvalidArity;
     if (!common.onlyNoOptions(options)) return error.InvalidOptions;
     if (!common.variadicCaseWhenSupported(args)) return error.InvalidInput;
-    if (args[0].dataType() == .struct_) {
-        var compat = try buildCaseWhenCompatArgsFromStruct(ctx.tempAllocator(), args);
-        defer compat.deinit();
-        return runSelectionKernel(ctx, compat.args, compat.config, args[1].dataType());
-    }
-    const config = try parseCaseWhenConfig(args);
-    return runSelectionKernel(ctx, args, config, args[1].dataType());
+    var struct_args = try buildCaseWhenStructArgs(ctx.tempAllocator(), args);
+    defer struct_args.deinit();
+    return runSelectionKernel(ctx, struct_args.args, struct_args.config, args[1].dataType());
 }

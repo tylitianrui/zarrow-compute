@@ -142,27 +142,6 @@ pub fn variadicChooseSupported(args: []const compute.Datum) bool {
     return true;
 }
 
-fn caseWhenPairsSupported(args: []const compute.Datum) bool {
-    if (args.len < 2) return false;
-    const has_else = (args.len % 2) == 1;
-    const pair_count = if (has_else) (args.len - 1) / 2 else args.len / 2;
-    if (pair_count == 0) return false;
-
-    const first_value_type = args[1].dataType();
-    if (!isFilterSupportedType(first_value_type)) return false;
-
-    var pair_index: usize = 0;
-    while (pair_index < pair_count) : (pair_index += 1) {
-        const cond_i = pair_index * 2;
-        const value_i = cond_i + 1;
-        if (!args[cond_i].dataType().eql(.{ .bool = {} })) return false;
-        if (!args[value_i].dataType().eql(first_value_type)) return false;
-    }
-
-    if (has_else and !args[args.len - 1].dataType().eql(first_value_type)) return false;
-    return true;
-}
-
 fn caseWhenStructSupported(args: []const compute.Datum) bool {
     if (args.len < 2) return false;
     if (!(args[0].isArray() or args[0].isChunked())) return false;
@@ -189,7 +168,7 @@ fn caseWhenStructSupported(args: []const compute.Datum) bool {
 }
 
 pub fn variadicCaseWhenSupported(args: []const compute.Datum) bool {
-    return caseWhenStructSupported(args) or caseWhenPairsSupported(args);
+    return caseWhenStructSupported(args);
 }
 
 pub fn resultI64(args: []const compute.Datum, options: compute.Options) compute.KernelError!compute.DataType {

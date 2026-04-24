@@ -1737,7 +1737,7 @@ test "case_when struct<bool...> rejects mismatched cases arity" {
     );
 }
 
-test "case_when compatibility supports variadic condition-value pairs with optional else" {
+test "case_when rejects legacy cond-value pair signature" {
     const allocator = std.testing.allocator;
     var registry = compute.FunctionRegistry.init(allocator);
     defer registry.deinit();
@@ -1784,68 +1784,10 @@ test "case_when compatibility supports variadic condition-value pairs with optio
         d.release();
     }
 
-    var out = try ctx.invokeVector("case_when", args[0..], compute.Options.noneValue());
-    defer out.release();
-    try std.testing.expect(out.isArray());
-    try std.testing.expect(out.dataType().eql(.{ .int64 = {} }));
-
-    const view = zcore.Int64Array{ .data = out.array.data() };
-    try std.testing.expectEqual(@as(usize, 5), view.len());
-    try std.testing.expectEqual(@as(i64, 2), view.value(0));
-    try std.testing.expectEqual(@as(i64, 1), view.value(1));
-    try std.testing.expect(view.isNull(2));
-    try std.testing.expectEqual(@as(i64, 9), view.value(3));
-    try std.testing.expect(view.isNull(4));
-}
-
-test "case_when compatibility without else falls back to null" {
-    const allocator = std.testing.allocator;
-    var registry = compute.FunctionRegistry.init(allocator);
-    defer registry.deinit();
-    try registerBaseKernels(&registry);
-    var ctx = compute.ExecContext.init(allocator, &registry);
-
-    var cond0 = try makeBoolArray(allocator, &[_]?bool{ false, null, true });
-    defer cond0.release();
-    var v0 = try makeStringArray(allocator, &[_]?[]const u8{ "A", null, "C" });
-    defer v0.release();
-    var cond1 = try makeBoolArray(allocator, &[_]?bool{ false, true, false });
-    defer cond1.release();
-    var v1 = try makeStringArray(allocator, &[_]?[]const u8{ "B", "B", null });
-    defer v1.release();
-    const args = [_]compute.Datum{
-        compute.Datum.fromArray(cond0.retain()),
-        compute.Datum.fromArray(v0.retain()),
-        compute.Datum.fromArray(cond1.retain()),
-        compute.Datum.fromArray(v1.retain()),
-    };
-    defer {
-        var d = args[0];
-        d.release();
-    }
-    defer {
-        var d = args[1];
-        d.release();
-    }
-    defer {
-        var d = args[2];
-        d.release();
-    }
-    defer {
-        var d = args[3];
-        d.release();
-    }
-
-    var out = try ctx.invokeVector("case_when", args[0..], compute.Options.noneValue());
-    defer out.release();
-    try std.testing.expect(out.isArray());
-    try std.testing.expect(out.dataType().eql(.{ .string = {} }));
-
-    const view = zcore.StringArray{ .data = out.array.data() };
-    try std.testing.expectEqual(@as(usize, 3), view.len());
-    try std.testing.expect(view.isNull(0));
-    try std.testing.expect(std.mem.eql(u8, view.value(1), "B"));
-    try std.testing.expect(std.mem.eql(u8, view.value(2), "C"));
+    try std.testing.expectError(
+        error.NoMatchingKernel,
+        ctx.invokeVector("case_when", args[0..], compute.Options.noneValue()),
+    );
 }
 
 test "subtract_i64 supports null propagation and overflow behavior" {
