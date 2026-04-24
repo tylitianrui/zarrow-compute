@@ -87,10 +87,7 @@ pub fn isFilterSupportedType(data_type: compute.DataType) bool {
 }
 
 pub fn isIfElseSupportedType(data_type: compute.DataType) bool {
-    return switch (data_type) {
-        .string, .large_string, .string_view, .binary, .large_binary, .binary_view => true,
-        else => isFilterFixedWidthType(data_type),
-    };
+    return isFilterSupportedType(data_type);
 }
 
 pub fn binarySupportedFilter(args: []const compute.Datum) bool {

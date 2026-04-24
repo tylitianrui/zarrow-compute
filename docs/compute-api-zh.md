@@ -18,7 +18,7 @@
 - `is_null`（vector，输出 `bool` 掩码）
 - `is_valid`（vector，输出 `bool` 掩码）
 - `true_unless_null`（vector，非 null 输出 `true`，null 输出 `false`）
-- `if_else`（vector，第一版支持 `fixed-width + string/binary` 子集）
+- `if_else`（vector，支持 `null/bool/fixed-width/string/binary` 子集）
 - `coalesce`（vector，可变参数，按行选择第一个非 null）
 - `choose`（vector，可变参数，按 0-based 索引选择值）
 - `case_when`（vector，Arrow 原生 `struct<bool...> + *cases`，支持可选 else）
@@ -60,7 +60,7 @@
 - `drop_null` 仅接受 `Options.none`（删除输入中的 null，保留非 null 值的相对顺序）
 - `is_null` / `is_valid` 仅接受 `Options.none`
 - `true_unless_null` 仅接受 `Options.none`（非 null 结果为 `true`，null 结果为 `false`）
-- `if_else` 仅接受 `Options.none`（`condition` 为 null 输出 null；`true` 选左值；`false` 选右值；当前支持 `fixed-width + string/binary` 子集）
+- `if_else` 仅接受 `Options.none`（`condition` 为 null 输出 null；`true` 选左值；`false` 选右值；当前支持 `null/bool/fixed-width/string/binary` 子集）
 - `coalesce` 仅接受 `Options.none`（按行返回首个非 null 值，若全部为 null 则输出 null）
 - `choose` 仅接受 `Options.none`（第一个参数为索引，索引 null 输出 null，越界返回 `InvalidInput`）
 - `case_when` 仅接受 `Options.none`（参数为 `conds_struct, case_0, case_1, ... [, else]`，其中 `conds_struct` 为 `struct<bool...>`，按首个 true 条件选值）

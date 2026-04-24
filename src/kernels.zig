@@ -45,6 +45,13 @@ fn makeBoolArray(allocator: std.mem.Allocator, values: []const ?bool) !zcore.Arr
     return builder.finish();
 }
 
+fn makeNullArray(allocator: std.mem.Allocator, len: usize) !zcore.ArrayRef {
+    var builder = try zcore.NullBuilder.init(allocator, len);
+    defer builder.deinit();
+    try builder.appendNulls(len);
+    return builder.finish();
+}
+
 fn makeStructBool2Array(
     allocator: std.mem.Allocator,
     cond0: zcore.ArrayRef,
@@ -1291,6 +1298,96 @@ test "if_else supports string values and null propagation from selected branch" 
     try std.testing.expect(std.mem.eql(u8, view.value(0), "R"));
     try std.testing.expect(view.isNull(1));
     try std.testing.expect(view.isNull(2));
+}
+
+test "if_else supports bool values with branch and condition null propagation" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var cond = try makeBoolArray(allocator, &[_]?bool{ true, false, true, false, null });
+    defer cond.release();
+    var lhs = try makeBoolArray(allocator, &[_]?bool{ true, null, false, true, true });
+    defer lhs.release();
+    var rhs = try makeBoolArray(allocator, &[_]?bool{ false, true, null, null, false });
+    defer rhs.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(cond.retain()),
+        compute.Datum.fromArray(lhs.retain()),
+        compute.Datum.fromArray(rhs.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("if_else", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .bool = {} }));
+
+    const view = zcore.BooleanArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 5), view.len());
+    try std.testing.expectEqual(true, view.value(0));
+    try std.testing.expectEqual(true, view.value(1));
+    try std.testing.expectEqual(false, view.value(2));
+    try std.testing.expect(view.isNull(3));
+    try std.testing.expect(view.isNull(4));
+}
+
+test "if_else supports null type" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var cond = try makeBoolArray(allocator, &[_]?bool{ true, false, null, true });
+    defer cond.release();
+    var lhs = try makeNullArray(allocator, 4);
+    defer lhs.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(cond.retain()),
+        compute.Datum.fromArray(lhs.retain()),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .null = {} },
+            .value = .null,
+        }),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("if_else", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .null = {} }));
+
+    const view = zcore.NullArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 4), view.len());
+    try std.testing.expect(view.isNull(0));
+    try std.testing.expect(view.isNull(1));
+    try std.testing.expect(view.isNull(2));
+    try std.testing.expect(view.isNull(3));
 }
 
 test "if_else supports misaligned chunk boundaries across three inputs" {

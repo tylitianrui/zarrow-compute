@@ -83,6 +83,76 @@ pub fn trueUnlessNullKernel(
     return compute.Datum.fromArray(out);
 }
 
+fn ifElseNullKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+) compute.KernelError!compute.Datum {
+    const out_len = try inferTernaryExecLen(args[0], args[1], args[2]);
+    var builder = try zcore.NullBuilder.init(ctx.tempAllocator(), out_len);
+    defer builder.deinit();
+
+    var i: usize = 0;
+    while (i < out_len) : (i += 1) {
+        builder.appendNull() catch |err| return common.kernelAppendError(err);
+    }
+
+    const out = builder.finish() catch |err| return common.kernelAppendError(err);
+    return compute.Datum.fromArray(out);
+}
+
+fn ifElseBoolKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+) compute.KernelError!compute.Datum {
+    const out_len = try inferTernaryExecLen(args[0], args[1], args[2]);
+
+    var cond_iter = compute.UnaryExecChunkIterator.init(args[0]);
+    var values_iter = try compute.BinaryExecChunkIterator.init(args[1], args[2]);
+    var cond_chunk_opt: ?compute.UnaryExecChunk = null;
+    defer if (cond_chunk_opt) |*c| c.deinit();
+    var values_chunk_opt: ?compute.BinaryExecChunk = null;
+    defer if (values_chunk_opt) |*c| c.deinit();
+    var cond_index: usize = 0;
+    var values_index: usize = 0;
+    var produced: usize = 0;
+
+    var builder = try zcore.BooleanBuilder.init(ctx.tempAllocator(), out_len);
+    defer builder.deinit();
+
+    while (produced < out_len) {
+        try ensureUnaryChunk(&cond_iter, &cond_chunk_opt, &cond_index);
+        try ensureBinaryChunk(&values_iter, &values_chunk_opt, &values_index);
+        if (cond_chunk_opt == null or values_chunk_opt == null) return error.InvalidInput;
+
+        const cond_chunk = &cond_chunk_opt.?;
+        const values_chunk = &values_chunk_opt.?;
+        const run_len = @min(cond_chunk.len - cond_index, values_chunk.len - values_index);
+        var j: usize = 0;
+        while (j < run_len) : (j += 1) {
+            const ci = cond_index + j;
+            const vi = values_index + j;
+            if (cond_chunk.values.isNullAt(ci)) {
+                builder.appendNull() catch |err| return common.kernelAppendError(err);
+                continue;
+            }
+            const take_lhs = try common.readBool(cond_chunk.values, ci);
+            const selected = if (take_lhs) values_chunk.lhs else values_chunk.rhs;
+            if (selected.isNullAt(vi)) {
+                builder.appendNull() catch |err| return common.kernelAppendError(err);
+                continue;
+            }
+            const value = try common.readBool(selected, vi);
+            builder.append(value) catch |err| return common.kernelAppendError(err);
+        }
+        produced += run_len;
+        cond_index += run_len;
+        values_index += run_len;
+    }
+
+    const out = builder.finish() catch |err| return common.kernelAppendError(err);
+    return compute.Datum.fromArray(out);
+}
+
 fn ifElseStringKernel(
     ctx: *compute.ExecContext,
     args: []const compute.Datum,
@@ -437,6 +507,8 @@ pub fn ifElseKernel(
     if (!data_type.eql(args[2].dataType())) return error.InvalidInput;
 
     return switch (data_type) {
+        .null => ifElseNullKernel(ctx, args),
+        .bool => ifElseBoolKernel(ctx, args),
         .string => ifElseStringKernel(ctx, args, .string),
         .large_string => ifElseStringKernel(ctx, args, .large_string),
         .string_view => ifElseStringKernel(ctx, args, .string_view),
