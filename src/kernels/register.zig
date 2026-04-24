@@ -89,6 +89,39 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
         .exec = conditionals.ifElseKernel,
     });
 
+    try registry.registerVectorKernel("coalesce", .{
+        .signature = .{
+            .arity = 1,
+            .variadic = true,
+            .type_check = common.variadicCoalesceSupported,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultSameAsFirst,
+        },
+        .exec = conditionals.coalesceKernel,
+    });
+
+    try registry.registerVectorKernel("choose", .{
+        .signature = .{
+            .arity = 2,
+            .variadic = true,
+            .type_check = common.variadicChooseSupported,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultSameAsSecond,
+        },
+        .exec = conditionals.chooseKernel,
+    });
+
+    try registry.registerVectorKernel("case_when", .{
+        .signature = .{
+            .arity = 2,
+            .variadic = true,
+            .type_check = common.variadicCaseWhenSupported,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultSameAsSecond,
+        },
+        .exec = conditionals.caseWhenKernel,
+    });
+
     try registry.registerVectorKernel("subtract_i64", .{
         .signature = .{
             .arity = 2,

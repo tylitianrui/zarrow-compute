@@ -114,6 +114,55 @@ pub fn ternaryBoolIfElseSupported(args: []const compute.Datum) bool {
         isIfElseSupportedType(args[1].dataType());
 }
 
+pub fn isChooseIndexType(data_type: compute.DataType) bool {
+    return switch (data_type) {
+        .int8, .int16, .int32, .int64, .uint8, .uint16, .uint32, .uint64 => true,
+        else => false,
+    };
+}
+
+pub fn variadicCoalesceSupported(args: []const compute.Datum) bool {
+    if (args.len < 1) return false;
+    const value_type = args[0].dataType();
+    if (!isFilterSupportedType(value_type)) return false;
+    for (args[1..]) |arg| {
+        if (!arg.dataType().eql(value_type)) return false;
+    }
+    return true;
+}
+
+pub fn variadicChooseSupported(args: []const compute.Datum) bool {
+    if (args.len < 2) return false;
+    if (!isChooseIndexType(args[0].dataType())) return false;
+    const value_type = args[1].dataType();
+    if (!isFilterSupportedType(value_type)) return false;
+    for (args[2..]) |arg| {
+        if (!arg.dataType().eql(value_type)) return false;
+    }
+    return true;
+}
+
+pub fn variadicCaseWhenSupported(args: []const compute.Datum) bool {
+    if (args.len < 2) return false;
+    const has_else = (args.len % 2) == 1;
+    const pair_count = if (has_else) (args.len - 1) / 2 else args.len / 2;
+    if (pair_count == 0) return false;
+
+    const first_value_type = args[1].dataType();
+    if (!isFilterSupportedType(first_value_type)) return false;
+
+    var pair_index: usize = 0;
+    while (pair_index < pair_count) : (pair_index += 1) {
+        const cond_i = pair_index * 2;
+        const value_i = cond_i + 1;
+        if (!args[cond_i].dataType().eql(.{ .bool = {} })) return false;
+        if (!args[value_i].dataType().eql(first_value_type)) return false;
+    }
+
+    if (has_else and !args[args.len - 1].dataType().eql(first_value_type)) return false;
+    return true;
+}
+
 pub fn resultI64(args: []const compute.Datum, options: compute.Options) compute.KernelError!compute.DataType {
     _ = options;
     if (args.len == 0) return error.InvalidArity;
@@ -201,6 +250,73 @@ pub fn readBool(value: compute.ExecChunkValue, logical_index: usize) compute.Ker
             if (!dt.eql(.{ .bool = {} })) break :blk error.UnsupportedType;
             const view = zcore.BooleanArray{ .data = arr.data() };
             break :blk view.value(logical_index);
+        },
+    };
+}
+
+fn castSignedIndexToUsize(index: anytype) compute.KernelError!usize {
+    if (index < 0) return error.InvalidInput;
+    return std.math.cast(usize, index) orelse error.InvalidInput;
+}
+
+fn castUnsignedIndexToUsize(index: anytype) compute.KernelError!usize {
+    return std.math.cast(usize, index) orelse error.InvalidInput;
+}
+
+pub fn readChooseIndex(value: compute.ExecChunkValue, logical_index: usize) compute.KernelError!usize {
+    return switch (value) {
+        .scalar => |s| switch (s.value) {
+            .i8 => |v| castSignedIndexToUsize(v),
+            .i16 => |v| castSignedIndexToUsize(v),
+            .i32 => |v| castSignedIndexToUsize(v),
+            .i64 => |v| castSignedIndexToUsize(v),
+            .u8 => |v| castUnsignedIndexToUsize(v),
+            .u16 => |v| castUnsignedIndexToUsize(v),
+            .u32 => |v| castUnsignedIndexToUsize(v),
+            .u64 => |v| castUnsignedIndexToUsize(v),
+            else => error.InvalidInput,
+        },
+        .array => |arr| blk: {
+            const dt = arr.data().data_type;
+            if (dt.eql(.{ .int8 = {} })) {
+                const view = zcore.Int8Array{ .data = arr.data() };
+                const v = view.value(logical_index) catch return error.InvalidInput;
+                break :blk castSignedIndexToUsize(v);
+            }
+            if (dt.eql(.{ .int16 = {} })) {
+                const view = zcore.Int16Array{ .data = arr.data() };
+                const v = view.value(logical_index) catch return error.InvalidInput;
+                break :blk castSignedIndexToUsize(v);
+            }
+            if (dt.eql(.{ .int32 = {} })) {
+                const view = zcore.Int32Array{ .data = arr.data() };
+                const v = view.value(logical_index) catch return error.InvalidInput;
+                break :blk castSignedIndexToUsize(v);
+            }
+            if (dt.eql(.{ .int64 = {} })) {
+                const view = zcore.Int64Array{ .data = arr.data() };
+                break :blk castSignedIndexToUsize(view.value(logical_index) catch return error.InvalidInput);
+            }
+            if (dt.eql(.{ .uint8 = {} })) {
+                const view = zcore.UInt8Array{ .data = arr.data() };
+                const v = view.value(logical_index) catch return error.InvalidInput;
+                break :blk castUnsignedIndexToUsize(v);
+            }
+            if (dt.eql(.{ .uint16 = {} })) {
+                const view = zcore.UInt16Array{ .data = arr.data() };
+                const v = view.value(logical_index) catch return error.InvalidInput;
+                break :blk castUnsignedIndexToUsize(v);
+            }
+            if (dt.eql(.{ .uint32 = {} })) {
+                const view = zcore.UInt32Array{ .data = arr.data() };
+                const v = view.value(logical_index) catch return error.InvalidInput;
+                break :blk castUnsignedIndexToUsize(v);
+            }
+            if (dt.eql(.{ .uint64 = {} })) {
+                const view = zcore.UInt64Array{ .data = arr.data() };
+                break :blk castUnsignedIndexToUsize(view.value(logical_index) catch return error.InvalidInput);
+            }
+            break :blk error.UnsupportedType;
         },
     };
 }

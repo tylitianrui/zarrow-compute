@@ -172,7 +172,7 @@ test "register base kernels exposes expected registry surface and resolvable sig
     defer registry.deinit();
     try registerBaseKernels(&registry);
 
-    try std.testing.expectEqual(@as(usize, 13), registry.functionCount());
+    try std.testing.expectEqual(@as(usize, 16), registry.functionCount());
 
     const vector_names = [_][]const u8{
         "add_i64",
@@ -183,6 +183,9 @@ test "register base kernels exposes expected registry surface and resolvable sig
         "is_valid",
         "true_unless_null",
         "if_else",
+        "coalesce",
+        "choose",
+        "case_when",
         "subtract_i64",
         "divide_i64",
         "multiply_i64",
@@ -307,6 +310,82 @@ test "register base kernels exposes expected registry surface and resolvable sig
     );
     try std.testing.expect(if_else_ty.eql(.{ .int32 = {} }));
 
+    const coalesce_args = [_]compute.Datum{
+        compute.Datum.fromArray(filter_values.retain()),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int32 = {} },
+            .value = .{ .i32 = 99 },
+        }),
+    };
+    defer {
+        var d = coalesce_args[0];
+        d.release();
+    }
+    defer {
+        var d = coalesce_args[1];
+        d.release();
+    }
+    const coalesce_ty = try registry.resolveResultType(
+        "coalesce",
+        .vector,
+        coalesce_args[0..],
+        compute.Options.noneValue(),
+    );
+    try std.testing.expect(coalesce_ty.eql(.{ .int32 = {} }));
+
+    const choose_args = [_]compute.Datum{
+        compute.Datum.fromArray(filter_values.retain()),
+        compute.Datum.fromArray(filter_values.retain()),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int32 = {} },
+            .value = .{ .i32 = 42 },
+        }),
+    };
+    defer {
+        var d = choose_args[0];
+        d.release();
+    }
+    defer {
+        var d = choose_args[1];
+        d.release();
+    }
+    defer {
+        var d = choose_args[2];
+        d.release();
+    }
+    const choose_ty = try registry.resolveResultType(
+        "choose",
+        .vector,
+        choose_args[0..],
+        compute.Options.noneValue(),
+    );
+    try std.testing.expect(choose_ty.eql(.{ .int32 = {} }));
+
+    const case_when_args = [_]compute.Datum{
+        compute.Datum.fromArray(filter_pred.retain()),
+        compute.Datum.fromArray(filter_values.retain()),
+        compute.Datum.fromArray(filter_values.retain()),
+    };
+    defer {
+        var d = case_when_args[0];
+        d.release();
+    }
+    defer {
+        var d = case_when_args[1];
+        d.release();
+    }
+    defer {
+        var d = case_when_args[2];
+        d.release();
+    }
+    const case_when_ty = try registry.resolveResultType(
+        "case_when",
+        .vector,
+        case_when_args[0..],
+        compute.Options.noneValue(),
+    );
+    try std.testing.expect(case_when_ty.eql(.{ .int32 = {} }));
+
     const cast_args = [_]compute.Datum{
         compute.Datum.fromScalar(.{
             .data_type = .{ .int64 = {} },
@@ -360,6 +439,9 @@ test "register compat kernels matches base registry surface" {
         "is_valid",
         "true_unless_null",
         "if_else",
+        "coalesce",
+        "choose",
+        "case_when",
         "subtract_i64",
         "divide_i64",
         "multiply_i64",
@@ -1309,6 +1391,289 @@ test "if_else rejects non-none options" {
         error.InvalidOptions,
         ctx.invokeVector("if_else", args[0..], .{ .filter = .{} }),
     );
+}
+
+test "coalesce supports variadic scalar broadcast and first-non-null semantics" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var primary = try makeInt64Array(allocator, &[_]?i64{ null, 2, null, 4 });
+    defer primary.release();
+    var backup = try makeInt64Array(allocator, &[_]?i64{ 7, null, 8, null });
+    defer backup.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(primary.retain()),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int64 = {} },
+            .value = .{ .i64 = 9 },
+        }),
+        compute.Datum.fromArray(backup.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("coalesce", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .int64 = {} }));
+
+    const view = zcore.Int64Array{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 4), view.len());
+    try std.testing.expectEqual(@as(i64, 9), view.value(0));
+    try std.testing.expectEqual(@as(i64, 2), view.value(1));
+    try std.testing.expectEqual(@as(i64, 9), view.value(2));
+    try std.testing.expectEqual(@as(i64, 4), view.value(3));
+}
+
+test "coalesce outputs null only when all candidates are null" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var lhs = try makeStringArray(allocator, &[_]?[]const u8{ null, "x", null });
+    defer lhs.release();
+    var rhs = try makeStringArray(allocator, &[_]?[]const u8{ null, null, "y" });
+    defer rhs.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(lhs.retain()),
+        compute.Datum.fromArray(rhs.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("coalesce", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .string = {} }));
+
+    const view = zcore.StringArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), view.len());
+    try std.testing.expect(view.isNull(0));
+    try std.testing.expect(std.mem.eql(u8, view.value(1), "x"));
+    try std.testing.expect(std.mem.eql(u8, view.value(2), "y"));
+}
+
+test "choose supports variadic value selection with null propagation" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var indices = try makeInt32Array(allocator, &[_]?i32{ 0, 1, null, 1, 2 });
+    defer indices.release();
+    var v0 = try makeInt64Array(allocator, &[_]?i64{ 10, 11, 12, 13, 14 });
+    defer v0.release();
+    var v1 = try makeInt64Array(allocator, &[_]?i64{ 20, null, 22, 23, 24 });
+    defer v1.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(indices.retain()),
+        compute.Datum.fromArray(v0.retain()),
+        compute.Datum.fromArray(v1.retain()),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int64 = {} },
+            .value = .{ .i64 = 99 },
+        }),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+    defer {
+        var d = args[3];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("choose", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .int64 = {} }));
+
+    const view = zcore.Int64Array{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 5), view.len());
+    try std.testing.expectEqual(@as(i64, 10), view.value(0));
+    try std.testing.expect(view.isNull(1));
+    try std.testing.expect(view.isNull(2));
+    try std.testing.expectEqual(@as(i64, 23), view.value(3));
+    try std.testing.expectEqual(@as(i64, 99), view.value(4));
+}
+
+test "choose rejects out-of-bounds index" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var indices = try makeInt32Array(allocator, &[_]?i32{ 0, 3 });
+    defer indices.release();
+    var v0 = try makeInt64Array(allocator, &[_]?i64{ 1, 2 });
+    defer v0.release();
+    var v1 = try makeInt64Array(allocator, &[_]?i64{ 4, 5 });
+    defer v1.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(indices.retain()),
+        compute.Datum.fromArray(v0.retain()),
+        compute.Datum.fromArray(v1.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+
+    try std.testing.expectError(
+        error.InvalidInput,
+        ctx.invokeVector("choose", args[0..], compute.Options.noneValue()),
+    );
+}
+
+test "case_when supports variadic condition-value pairs with optional else" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var cond0 = try makeBoolArray(allocator, &[_]?bool{ false, true, null, false, true });
+    defer cond0.release();
+    var v0 = try makeInt64Array(allocator, &[_]?i64{ 1, 1, 1, 1, null });
+    defer v0.release();
+    var cond1 = try makeBoolArray(allocator, &[_]?bool{ true, false, true, null, true });
+    defer cond1.release();
+    var v1 = try makeInt64Array(allocator, &[_]?i64{ 2, 2, null, 2, 2 });
+    defer v1.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(cond0.retain()),
+        compute.Datum.fromArray(v0.retain()),
+        compute.Datum.fromArray(cond1.retain()),
+        compute.Datum.fromArray(v1.retain()),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int64 = {} },
+            .value = .{ .i64 = 9 },
+        }),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+    defer {
+        var d = args[3];
+        d.release();
+    }
+    defer {
+        var d = args[4];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("case_when", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .int64 = {} }));
+
+    const view = zcore.Int64Array{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 5), view.len());
+    try std.testing.expectEqual(@as(i64, 2), view.value(0));
+    try std.testing.expectEqual(@as(i64, 1), view.value(1));
+    try std.testing.expect(view.isNull(2));
+    try std.testing.expectEqual(@as(i64, 9), view.value(3));
+    try std.testing.expect(view.isNull(4));
+}
+
+test "case_when without else falls back to null" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var cond0 = try makeBoolArray(allocator, &[_]?bool{ false, null, true });
+    defer cond0.release();
+    var v0 = try makeStringArray(allocator, &[_]?[]const u8{ "A", null, "C" });
+    defer v0.release();
+    var cond1 = try makeBoolArray(allocator, &[_]?bool{ false, true, false });
+    defer cond1.release();
+    var v1 = try makeStringArray(allocator, &[_]?[]const u8{ "B", "B", null });
+    defer v1.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(cond0.retain()),
+        compute.Datum.fromArray(v0.retain()),
+        compute.Datum.fromArray(cond1.retain()),
+        compute.Datum.fromArray(v1.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+    defer {
+        var d = args[3];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("case_when", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType().eql(.{ .string = {} }));
+
+    const view = zcore.StringArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), view.len());
+    try std.testing.expect(view.isNull(0));
+    try std.testing.expect(std.mem.eql(u8, view.value(1), "B"));
+    try std.testing.expect(std.mem.eql(u8, view.value(2), "C"));
 }
 
 test "subtract_i64 supports null propagation and overflow behavior" {

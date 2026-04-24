@@ -448,3 +448,449 @@ pub fn ifElseKernel(
         },
     };
 }
+
+const SelectionKind = enum {
+    coalesce,
+    choose,
+    case_when,
+};
+
+const SelectionConfig = struct {
+    kind: SelectionKind,
+    case_pair_count: usize = 0,
+    has_else: bool = false,
+};
+
+fn parseCaseWhenConfig(args: []const compute.Datum) compute.KernelError!SelectionConfig {
+    if (args.len < 2) return error.InvalidArity;
+    const has_else = (args.len % 2) == 1;
+    const case_pair_count = if (has_else) (args.len - 1) / 2 else args.len / 2;
+    if (case_pair_count == 0) return error.InvalidArity;
+    return .{
+        .kind = .case_when,
+        .case_pair_count = case_pair_count,
+        .has_else = has_else,
+    };
+}
+
+fn resolveSelectedArgIndex(
+    values: []const compute.ExecChunkValue,
+    row: usize,
+    config: SelectionConfig,
+) compute.KernelError!?usize {
+    return switch (config.kind) {
+        .coalesce => blk: {
+            for (values, 0..) |value, arg_index| {
+                if (!value.isNullAt(row)) break :blk arg_index;
+            }
+            break :blk null;
+        },
+        .choose => blk: {
+            if (values.len < 2) return error.InvalidArity;
+            if (values[0].isNullAt(row)) break :blk null;
+            const index = try common.readChooseIndex(values[0], row);
+            const value_count = values.len - 1;
+            if (index >= value_count) return error.InvalidInput;
+            break :blk index + 1;
+        },
+        .case_when => blk: {
+            var pair_index: usize = 0;
+            while (pair_index < config.case_pair_count) : (pair_index += 1) {
+                const cond_index = pair_index * 2;
+                const value_index = cond_index + 1;
+                if (values[cond_index].isNullAt(row)) continue;
+                const cond = try common.readBool(values[cond_index], row);
+                if (cond) break :blk value_index;
+            }
+            if (config.has_else) break :blk values.len - 1;
+            break :blk null;
+        },
+    };
+}
+
+fn selectNullKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    config: SelectionConfig,
+) compute.KernelError!compute.Datum {
+    const out_len = try compute.inferNaryExecLen(args);
+    var builder = try zcore.NullBuilder.init(ctx.tempAllocator(), out_len);
+    defer builder.deinit();
+
+    var iter = try compute.NaryExecChunkIterator.init(ctx.tempAllocator(), args);
+    defer iter.deinit();
+    while (try iter.next()) |chunk_value| {
+        var chunk = chunk_value;
+        defer chunk.deinit();
+        var i: usize = 0;
+        while (i < chunk.len) : (i += 1) {
+            _ = try resolveSelectedArgIndex(chunk.values, i, config);
+            builder.appendNull() catch |err| return common.kernelAppendError(err);
+        }
+    }
+
+    const out = builder.finish() catch |err| return common.kernelAppendError(err);
+    return compute.Datum.fromArray(out);
+}
+
+fn selectBoolKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    config: SelectionConfig,
+) compute.KernelError!compute.Datum {
+    const out_len = try compute.inferNaryExecLen(args);
+    var builder = try zcore.BooleanBuilder.init(ctx.tempAllocator(), out_len);
+    defer builder.deinit();
+
+    var iter = try compute.NaryExecChunkIterator.init(ctx.tempAllocator(), args);
+    defer iter.deinit();
+    while (try iter.next()) |chunk_value| {
+        var chunk = chunk_value;
+        defer chunk.deinit();
+        var i: usize = 0;
+        while (i < chunk.len) : (i += 1) {
+            const selected_index = try resolveSelectedArgIndex(chunk.values, i, config);
+            if (selected_index == null) {
+                builder.appendNull() catch |err| return common.kernelAppendError(err);
+                continue;
+            }
+            const selected = chunk.values[selected_index.?];
+            if (selected.isNullAt(i)) {
+                builder.appendNull() catch |err| return common.kernelAppendError(err);
+                continue;
+            }
+            const value = try common.readBool(selected, i);
+            builder.append(value) catch |err| return common.kernelAppendError(err);
+        }
+    }
+
+    const out = builder.finish() catch |err| return common.kernelAppendError(err);
+    return compute.Datum.fromArray(out);
+}
+
+fn selectStringKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    config: SelectionConfig,
+    kind: common.StringValueKind,
+) compute.KernelError!compute.Datum {
+    const out_len = try compute.inferNaryExecLen(args);
+    switch (kind) {
+        .string => {
+            var builder = try zcore.StringBuilder.init(ctx.tempAllocator(), out_len, 0);
+            defer builder.deinit();
+
+            var iter = try compute.NaryExecChunkIterator.init(ctx.tempAllocator(), args);
+            defer iter.deinit();
+            while (try iter.next()) |chunk_value| {
+                var chunk = chunk_value;
+                defer chunk.deinit();
+                var i: usize = 0;
+                while (i < chunk.len) : (i += 1) {
+                    const selected_index = try resolveSelectedArgIndex(chunk.values, i, config);
+                    if (selected_index == null) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+                    const selected = chunk.values[selected_index.?];
+                    if (selected.isNullAt(i)) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+                    const value = try common.readString(selected, i, .string);
+                    builder.append(value) catch |err| return common.kernelAppendError(err);
+                }
+            }
+
+            const out = builder.finish() catch |err| return common.kernelAppendError(err);
+            return compute.Datum.fromArray(out);
+        },
+        .large_string => {
+            var builder = try zcore.LargeStringBuilder.init(ctx.tempAllocator(), out_len, 0);
+            defer builder.deinit();
+
+            var iter = try compute.NaryExecChunkIterator.init(ctx.tempAllocator(), args);
+            defer iter.deinit();
+            while (try iter.next()) |chunk_value| {
+                var chunk = chunk_value;
+                defer chunk.deinit();
+                var i: usize = 0;
+                while (i < chunk.len) : (i += 1) {
+                    const selected_index = try resolveSelectedArgIndex(chunk.values, i, config);
+                    if (selected_index == null) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+                    const selected = chunk.values[selected_index.?];
+                    if (selected.isNullAt(i)) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+                    const value = try common.readString(selected, i, .large_string);
+                    builder.append(value) catch |err| return common.kernelAppendError(err);
+                }
+            }
+
+            const out = builder.finish() catch |err| return common.kernelAppendError(err);
+            return compute.Datum.fromArray(out);
+        },
+        .string_view => {
+            var builder = try zcore.StringViewBuilder.init(ctx.tempAllocator(), out_len, 0);
+            defer builder.deinit();
+
+            var iter = try compute.NaryExecChunkIterator.init(ctx.tempAllocator(), args);
+            defer iter.deinit();
+            while (try iter.next()) |chunk_value| {
+                var chunk = chunk_value;
+                defer chunk.deinit();
+                var i: usize = 0;
+                while (i < chunk.len) : (i += 1) {
+                    const selected_index = try resolveSelectedArgIndex(chunk.values, i, config);
+                    if (selected_index == null) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+                    const selected = chunk.values[selected_index.?];
+                    if (selected.isNullAt(i)) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+                    const value = try common.readString(selected, i, .string_view);
+                    builder.append(value) catch |err| return common.kernelAppendError(err);
+                }
+            }
+
+            const out = builder.finish() catch |err| return common.kernelAppendError(err);
+            return compute.Datum.fromArray(out);
+        },
+    }
+}
+
+fn selectBinaryKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    config: SelectionConfig,
+    kind: common.BinaryValueKind,
+) compute.KernelError!compute.Datum {
+    const out_len = try compute.inferNaryExecLen(args);
+    switch (kind) {
+        .binary => {
+            var builder = try zcore.BinaryBuilder.init(ctx.tempAllocator(), out_len, 0);
+            defer builder.deinit();
+
+            var iter = try compute.NaryExecChunkIterator.init(ctx.tempAllocator(), args);
+            defer iter.deinit();
+            while (try iter.next()) |chunk_value| {
+                var chunk = chunk_value;
+                defer chunk.deinit();
+                var i: usize = 0;
+                while (i < chunk.len) : (i += 1) {
+                    const selected_index = try resolveSelectedArgIndex(chunk.values, i, config);
+                    if (selected_index == null) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+                    const selected = chunk.values[selected_index.?];
+                    if (selected.isNullAt(i)) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+                    const value = try common.readBinary(selected, i, .binary);
+                    builder.append(value) catch |err| return common.kernelAppendError(err);
+                }
+            }
+
+            const out = builder.finish() catch |err| return common.kernelAppendError(err);
+            return compute.Datum.fromArray(out);
+        },
+        .large_binary => {
+            var builder = try zcore.LargeBinaryBuilder.init(ctx.tempAllocator(), out_len, 0);
+            defer builder.deinit();
+
+            var iter = try compute.NaryExecChunkIterator.init(ctx.tempAllocator(), args);
+            defer iter.deinit();
+            while (try iter.next()) |chunk_value| {
+                var chunk = chunk_value;
+                defer chunk.deinit();
+                var i: usize = 0;
+                while (i < chunk.len) : (i += 1) {
+                    const selected_index = try resolveSelectedArgIndex(chunk.values, i, config);
+                    if (selected_index == null) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+                    const selected = chunk.values[selected_index.?];
+                    if (selected.isNullAt(i)) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+                    const value = try common.readBinary(selected, i, .large_binary);
+                    builder.append(value) catch |err| return common.kernelAppendError(err);
+                }
+            }
+
+            const out = builder.finish() catch |err| return common.kernelAppendError(err);
+            return compute.Datum.fromArray(out);
+        },
+        .binary_view => {
+            var builder = try zcore.BinaryViewBuilder.init(ctx.tempAllocator(), out_len, 0);
+            defer builder.deinit();
+
+            var iter = try compute.NaryExecChunkIterator.init(ctx.tempAllocator(), args);
+            defer iter.deinit();
+            while (try iter.next()) |chunk_value| {
+                var chunk = chunk_value;
+                defer chunk.deinit();
+                var i: usize = 0;
+                while (i < chunk.len) : (i += 1) {
+                    const selected_index = try resolveSelectedArgIndex(chunk.values, i, config);
+                    if (selected_index == null) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+                    const selected = chunk.values[selected_index.?];
+                    if (selected.isNullAt(i)) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+                    const value = try common.readBinary(selected, i, .binary_view);
+                    builder.append(value) catch |err| return common.kernelAppendError(err);
+                }
+            }
+
+            const out = builder.finish() catch |err| return common.kernelAppendError(err);
+            return compute.Datum.fromArray(out);
+        },
+    }
+}
+
+fn selectFixedWidthKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    config: SelectionConfig,
+    data_type: compute.DataType,
+) compute.KernelError!compute.Datum {
+    if (!common.isFilterFixedWidthType(data_type)) return error.UnsupportedType;
+    const bit_width = data_type.bitWidth() orelse return error.UnsupportedType;
+    if (bit_width % 8 != 0) return error.UnsupportedType;
+    const byte_width = bit_width / 8;
+    const out_len = try compute.inferNaryExecLen(args);
+
+    var values = try zcore.OwnedBuffer.init(ctx.tempAllocator(), out_len * byte_width);
+    defer values.deinit();
+    var validity = try zcore.OwnedBuffer.init(ctx.tempAllocator(), common.bitByteLength(out_len));
+    defer validity.deinit();
+    var null_count: usize = 0;
+    var produced: usize = 0;
+
+    var iter = try compute.NaryExecChunkIterator.init(ctx.tempAllocator(), args);
+    defer iter.deinit();
+    while (try iter.next()) |chunk_value| {
+        var chunk = chunk_value;
+        defer chunk.deinit();
+        var i: usize = 0;
+        while (i < chunk.len) : (i += 1) {
+            const out_index = produced + i;
+            const selected_index = try resolveSelectedArgIndex(chunk.values, i, config);
+            if (selected_index == null) {
+                null_count += 1;
+                continue;
+            }
+            const selected = chunk.values[selected_index.?];
+            if (selected.isNullAt(i)) {
+                null_count += 1;
+                continue;
+            }
+
+            var scratch: [32]u8 = undefined;
+            const src = try common.readFixedWidthBytes(selected, i, data_type, byte_width, &scratch);
+            const start = out_index * byte_width;
+            const end = start + byte_width;
+            @memcpy(values.data[start..end], src);
+            common.setBit(validity.data[0..], out_index);
+        }
+        produced += chunk.len;
+    }
+
+    const validity_shared = if (null_count == 0)
+        zcore.SharedBuffer.empty
+    else
+        validity.toShared(common.bitByteLength(out_len)) catch |err| return common.kernelAppendError(err);
+    errdefer if (null_count != 0) {
+        var owned = validity_shared;
+        owned.release();
+    };
+
+    const values_shared = values.toShared(out_len * byte_width) catch |err| return common.kernelAppendError(err);
+    errdefer {
+        var owned = values_shared;
+        owned.release();
+    }
+
+    const buffers = ctx.tempAllocator().alloc(zcore.SharedBuffer, 2) catch return error.OutOfMemory;
+    buffers[0] = validity_shared;
+    buffers[1] = values_shared;
+    const out = zcore.ArrayRef.fromOwnedUnsafe(ctx.tempAllocator(), .{
+        .data_type = data_type,
+        .length = out_len,
+        .null_count = null_count,
+        .buffers = buffers,
+    }) catch return error.OutOfMemory;
+    return compute.Datum.fromArray(out);
+}
+
+fn runSelectionKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    config: SelectionConfig,
+    data_type: compute.DataType,
+) compute.KernelError!compute.Datum {
+    return switch (data_type) {
+        .null => selectNullKernel(ctx, args, config),
+        .bool => selectBoolKernel(ctx, args, config),
+        .string => selectStringKernel(ctx, args, config, .string),
+        .large_string => selectStringKernel(ctx, args, config, .large_string),
+        .string_view => selectStringKernel(ctx, args, config, .string_view),
+        .binary => selectBinaryKernel(ctx, args, config, .binary),
+        .large_binary => selectBinaryKernel(ctx, args, config, .large_binary),
+        .binary_view => selectBinaryKernel(ctx, args, config, .binary_view),
+        else => blk: {
+            if (!common.isFilterFixedWidthType(data_type)) break :blk error.UnsupportedType;
+            break :blk selectFixedWidthKernel(ctx, args, config, data_type);
+        },
+    };
+}
+
+pub fn coalesceKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    options: compute.Options,
+) compute.KernelError!compute.Datum {
+    if (args.len < 1) return error.InvalidArity;
+    if (!common.onlyNoOptions(options)) return error.InvalidOptions;
+    if (!common.variadicCoalesceSupported(args)) return error.InvalidInput;
+    return runSelectionKernel(ctx, args, .{ .kind = .coalesce }, args[0].dataType());
+}
+
+pub fn chooseKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    options: compute.Options,
+) compute.KernelError!compute.Datum {
+    if (args.len < 2) return error.InvalidArity;
+    if (!common.onlyNoOptions(options)) return error.InvalidOptions;
+    if (!common.variadicChooseSupported(args)) return error.InvalidInput;
+    return runSelectionKernel(ctx, args, .{ .kind = .choose }, args[1].dataType());
+}
+
+pub fn caseWhenKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    options: compute.Options,
+) compute.KernelError!compute.Datum {
+    if (args.len < 2) return error.InvalidArity;
+    if (!common.onlyNoOptions(options)) return error.InvalidOptions;
+    if (!common.variadicCaseWhenSupported(args)) return error.InvalidInput;
+    const config = try parseCaseWhenConfig(args);
+    return runSelectionKernel(ctx, args, config, args[1].dataType());
+}

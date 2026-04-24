@@ -12,6 +12,9 @@
 - `is_valid`（vector，`is_null` 的反向掩码，使用 `Options.none`）
 - `true_unless_null`（vector，非 null 输出 `true`，null 输出 `false`，使用 `Options.none`）
 - `if_else`（vector，第一版支持 `fixed-width + string/binary` 子集，使用 `Options.none`）
+- `coalesce`（vector，可变参数，按行选择第一个非 null，使用 `Options.none`）
+- `choose`（vector，可变参数，按 0-based 索引选择值，使用 `Options.none`）
+- `case_when`（vector，可变参数条件-值对，支持可选 else，使用 `Options.none`）
 - `subtract_i64`（vector）
 - `divide_i64`（vector）
 - `multiply_i64`（vector）
@@ -37,6 +40,9 @@ is_null => [false, true, false]
 is_valid => [true, false, true]
 true_unless_null => [true, false, true]
 if_else => [1, null, 10]
+coalesce => [1, 7, 3]
+choose => [1, null, null]
+case_when => [10, null, null]
 count_rows => 3
 ```
 

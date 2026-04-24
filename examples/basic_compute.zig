@@ -19,6 +19,21 @@ fn makeInt64Array(allocator: std.mem.Allocator, values: []const ?i64) !zcore.Arr
     return builder.finish();
 }
 
+fn makeInt32Array(allocator: std.mem.Allocator, values: []const ?i32) !zcore.ArrayRef {
+    var builder = try zcore.Int32Builder.init(allocator, values.len);
+    defer builder.deinit();
+
+    for (values) |v| {
+        if (v) |x| {
+            try builder.append(x);
+        } else {
+            try builder.appendNull();
+        }
+    }
+
+    return builder.finish();
+}
+
 fn makeBoolArray(allocator: std.mem.Allocator, values: []const ?bool) !zcore.ArrayRef {
     var builder = try zcore.BooleanBuilder.init(allocator, values.len);
     defer builder.deinit();
@@ -173,6 +188,83 @@ pub fn main() !void {
     var if_else_out = try ctx.invokeVector("if_else", if_else_args[0..], compute.Options.noneValue());
     defer if_else_out.release();
     try printInt64DatumLine("if_else", if_else_out);
+
+    const coalesce_args = [_]compute.Datum{
+        compute.Datum.fromArray(left.retain()),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int64 = {} },
+            .value = .{ .i64 = 7 },
+        }),
+    };
+    defer {
+        var d = coalesce_args[0];
+        d.release();
+    }
+    defer {
+        var d = coalesce_args[1];
+        d.release();
+    }
+    var coalesce_out = try ctx.invokeVector("coalesce", coalesce_args[0..], compute.Options.noneValue());
+    defer coalesce_out.release();
+    try printInt64DatumLine("coalesce", coalesce_out);
+
+    var choose_indices = try makeInt32Array(allocator, &[_]?i32{ 0, 1, null });
+    defer choose_indices.release();
+    var choose_values1 = try makeInt64Array(allocator, &[_]?i64{ 100, null, 300 });
+    defer choose_values1.release();
+    const choose_args = [_]compute.Datum{
+        compute.Datum.fromArray(choose_indices.retain()),
+        compute.Datum.fromArray(left.retain()),
+        compute.Datum.fromArray(choose_values1.retain()),
+    };
+    defer {
+        var d = choose_args[0];
+        d.release();
+    }
+    defer {
+        var d = choose_args[1];
+        d.release();
+    }
+    defer {
+        var d = choose_args[2];
+        d.release();
+    }
+    var choose_out = try ctx.invokeVector("choose", choose_args[0..], compute.Options.noneValue());
+    defer choose_out.release();
+    try printInt64DatumLine("choose", choose_out);
+
+    var case_cond0 = try makeBoolArray(allocator, &[_]?bool{ false, true, false });
+    defer case_cond0.release();
+    var case_cond1 = try makeBoolArray(allocator, &[_]?bool{ true, false, null });
+    defer case_cond1.release();
+    const case_when_args = [_]compute.Datum{
+        compute.Datum.fromArray(case_cond0.retain()),
+        compute.Datum.fromArray(left.retain()),
+        compute.Datum.fromArray(case_cond1.retain()),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int64 = {} },
+            .value = .{ .i64 = 10 },
+        }),
+    };
+    defer {
+        var d = case_when_args[0];
+        d.release();
+    }
+    defer {
+        var d = case_when_args[1];
+        d.release();
+    }
+    defer {
+        var d = case_when_args[2];
+        d.release();
+    }
+    defer {
+        var d = case_when_args[3];
+        d.release();
+    }
+    var case_when_out = try ctx.invokeVector("case_when", case_when_args[0..], compute.Options.noneValue());
+    defer case_when_out.release();
+    try printInt64DatumLine("case_when", case_when_out);
 
     var count = try ctx.invokeAggregate("count_rows", args[0..1], compute.Options.noneValue());
     defer count.release();

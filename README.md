@@ -12,6 +12,9 @@ It reuses the compute framework layer (`zarrow-core`) from [`tylitianrui/zarrow`
 - `is_valid` (vector, inverse null bitmap to bool mask, `Options.none`)
 - `true_unless_null` (vector, true for non-null values and false for null values, `Options.none`)
 - `if_else` (vector, first version supports fixed-width + string/binary subset, `Options.none`)
+- `coalesce` (vector, variadic, select first non-null value, `Options.none`)
+- `choose` (vector, variadic, select value by 0-based index, `Options.none`)
+- `case_when` (vector, variadic condition-value pairs with optional else, `Options.none`)
 - `subtract_i64` (vector)
 - `divide_i64` (vector)
 - `multiply_i64` (vector)
@@ -37,6 +40,9 @@ is_null => [false, true, false]
 is_valid => [true, false, true]
 true_unless_null => [true, false, true]
 if_else => [1, null, 10]
+coalesce => [1, 7, 3]
+choose => [1, null, null]
+case_when => [10, null, null]
 count_rows => 3
 ```
 
