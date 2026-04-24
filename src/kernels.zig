@@ -249,6 +249,68 @@ fn makeListInt32Array(allocator: std.mem.Allocator) !zcore.ArrayRef {
     return list_builder.finish(values);
 }
 
+fn makeListInt32ArrayWithLens(
+    allocator: std.mem.Allocator,
+    lengths: []const ?usize,
+    values: []const i32,
+) !zcore.ArrayRef {
+    var expected_values_len: usize = 0;
+    for (lengths) |maybe_len| {
+        if (maybe_len) |len| expected_values_len += len;
+    }
+    if (expected_values_len != values.len) return error.InvalidInput;
+
+    var values_builder = try zcore.Int32Builder.init(allocator, values.len);
+    defer values_builder.deinit();
+    for (values) |value| {
+        try values_builder.append(value);
+    }
+    var value_ref = try values_builder.finish();
+    defer value_ref.release();
+
+    var list_builder = try zcore.ListBuilder.init(allocator, lengths.len, FIELD_LIST_ITEM_I32);
+    defer list_builder.deinit();
+    for (lengths) |maybe_len| {
+        if (maybe_len) |len| {
+            try list_builder.appendLen(len);
+        } else {
+            try list_builder.appendNull();
+        }
+    }
+
+    return list_builder.finish(value_ref);
+}
+
+fn makeFixedSizeListInt32Array(
+    allocator: std.mem.Allocator,
+    list_size: usize,
+    present: []const bool,
+    values: []const i32,
+) !zcore.ArrayRef {
+    const expected_values_len = std.math.mul(usize, present.len, list_size) catch return error.InvalidInput;
+    if (values.len != expected_values_len) return error.InvalidInput;
+
+    var values_builder = try zcore.Int32Builder.init(allocator, values.len);
+    defer values_builder.deinit();
+    for (values) |value| {
+        try values_builder.append(value);
+    }
+    var value_ref = try values_builder.finish();
+    defer value_ref.release();
+
+    var builder = try zcore.FixedSizeListBuilder.init(allocator, FIELD_LIST_ITEM_I32, list_size);
+    defer builder.deinit();
+    for (present) |is_present| {
+        if (is_present) {
+            try builder.appendValid();
+        } else {
+            try builder.appendNull();
+        }
+    }
+
+    return builder.finish(value_ref);
+}
+
 test "register base kernels exposes expected registry surface and resolvable signatures" {
     const allocator = std.testing.allocator;
     var registry = compute.FunctionRegistry.init(allocator);
@@ -1498,20 +1560,26 @@ test "if_else supports struct values with parent null propagation" {
     try std.testing.expectEqual(true, out_bool.value(0));
 }
 
-test "if_else rejects struct with unsupported list child at dispatch" {
+test "if_else supports list values with selected-branch null propagation" {
     const allocator = std.testing.allocator;
     var registry = compute.FunctionRegistry.init(allocator);
     defer registry.deinit();
     try registerBaseKernels(&registry);
     var ctx = compute.ExecContext.init(allocator, &registry);
 
-    var cond = try makeBoolArray(allocator, &[_]?bool{ true, false });
+    var cond = try makeBoolArray(allocator, &[_]?bool{ true, false, null, true, false, false });
     defer cond.release();
-    var list_child = try makeListInt32Array(allocator);
-    defer list_child.release();
-    var lhs = try makeStructListI32Array(allocator, list_child, &[_]bool{ true, true });
+    var lhs = try makeListInt32ArrayWithLens(
+        allocator,
+        &[_]?usize{ 2, null, 1, 2, 1, 1 },
+        &[_]i32{ 1, 2, 3, 4, 5, 6, 7 },
+    );
     defer lhs.release();
-    var rhs = try makeStructListI32Array(allocator, list_child, &[_]bool{ true, true });
+    var rhs = try makeListInt32ArrayWithLens(
+        allocator,
+        &[_]?usize{ 1, 2, 1, 1, 2, null },
+        &[_]i32{ 10, 11, 12, 13, 14, 15, 16 },
+    );
     defer rhs.release();
 
     const args = [_]compute.Datum{
@@ -1532,10 +1600,115 @@ test "if_else rejects struct with unsupported list child at dispatch" {
         d.release();
     }
 
-    try std.testing.expectError(
-        error.NoMatchingKernel,
-        ctx.invokeVector("if_else", args[0..], compute.Options.noneValue()),
+    var out = try ctx.invokeVector("if_else", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .list);
+
+    const out_list = zcore.ListArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 6), out_list.len());
+
+    var row0 = try out_list.value(0);
+    defer row0.release();
+    const row0_i32 = zcore.Int32Array{ .data = row0.data() };
+    try std.testing.expectEqual(@as(usize, 2), row0_i32.len());
+    try std.testing.expectEqual(@as(i32, 1), row0_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 2), row0_i32.value(1));
+
+    var row1 = try out_list.value(1);
+    defer row1.release();
+    const row1_i32 = zcore.Int32Array{ .data = row1.data() };
+    try std.testing.expectEqual(@as(usize, 2), row1_i32.len());
+    try std.testing.expectEqual(@as(i32, 11), row1_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 12), row1_i32.value(1));
+
+    try std.testing.expect(out_list.isNull(2));
+
+    var row3 = try out_list.value(3);
+    defer row3.release();
+    const row3_i32 = zcore.Int32Array{ .data = row3.data() };
+    try std.testing.expectEqual(@as(usize, 2), row3_i32.len());
+    try std.testing.expectEqual(@as(i32, 4), row3_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 5), row3_i32.value(1));
+
+    var row4 = try out_list.value(4);
+    defer row4.release();
+    const row4_i32 = zcore.Int32Array{ .data = row4.data() };
+    try std.testing.expectEqual(@as(usize, 2), row4_i32.len());
+    try std.testing.expectEqual(@as(i32, 15), row4_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 16), row4_i32.value(1));
+
+    try std.testing.expect(out_list.isNull(5));
+}
+
+test "if_else supports struct with list child field" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var cond = try makeBoolArray(allocator, &[_]?bool{ true, false, null });
+    defer cond.release();
+    var lhs_list = try makeListInt32ArrayWithLens(
+        allocator,
+        &[_]?usize{ 1, 2, 1 },
+        &[_]i32{ 1, 2, 3, 4 },
     );
+    defer lhs_list.release();
+    var rhs_list = try makeListInt32ArrayWithLens(
+        allocator,
+        &[_]?usize{ 1, 1, 2 },
+        &[_]i32{ 9, 8, 7, 6 },
+    );
+    defer rhs_list.release();
+    var lhs = try makeStructListI32Array(allocator, lhs_list, &[_]bool{ true, true, true });
+    defer lhs.release();
+    var rhs = try makeStructListI32Array(allocator, rhs_list, &[_]bool{ true, true, true });
+    defer rhs.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(cond.retain()),
+        compute.Datum.fromArray(lhs.retain()),
+        compute.Datum.fromArray(rhs.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("if_else", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .struct_);
+
+    const out_struct = zcore.StructArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), out_struct.len());
+    try std.testing.expect(!out_struct.isNull(0));
+    try std.testing.expect(!out_struct.isNull(1));
+    try std.testing.expect(out_struct.isNull(2));
+
+    const out_items = zcore.ListArray{ .data = out_struct.fieldRef(0).data() };
+    var row0 = try out_items.value(0);
+    defer row0.release();
+    const row0_i32 = zcore.Int32Array{ .data = row0.data() };
+    try std.testing.expectEqual(@as(usize, 1), row0_i32.len());
+    try std.testing.expectEqual(@as(i32, 1), row0_i32.value(0));
+
+    var row1 = try out_items.value(1);
+    defer row1.release();
+    const row1_i32 = zcore.Int32Array{ .data = row1.data() };
+    try std.testing.expectEqual(@as(usize, 1), row1_i32.len());
+    try std.testing.expectEqual(@as(i32, 8), row1_i32.value(0));
+    try std.testing.expect(out_items.isNull(2));
 }
 
 test "if_else supports misaligned chunk boundaries across three inputs" {
@@ -1597,7 +1770,7 @@ test "if_else supports misaligned chunk boundaries across three inputs" {
     try std.testing.expectEqual(@as(i32, 13), try view.value(3));
 }
 
-test "if_else rejects unsupported nested value type at dispatch" {
+test "if_else rejects unsupported fixed_size_list value type at dispatch" {
     const allocator = std.testing.allocator;
     var registry = compute.FunctionRegistry.init(allocator);
     defer registry.deinit();
@@ -1606,7 +1779,12 @@ test "if_else rejects unsupported nested value type at dispatch" {
 
     var cond = try makeBoolArray(allocator, &[_]?bool{ true, false });
     defer cond.release();
-    var values = try makeListInt32Array(allocator);
+    var values = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, true },
+        &[_]i32{ 1, 2, 3, 4 },
+    );
     defer values.release();
     const args = [_]compute.Datum{
         compute.Datum.fromArray(cond.retain()),

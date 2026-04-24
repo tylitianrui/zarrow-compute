@@ -600,6 +600,222 @@ fn ifElseStructKernel(
     return compute.Datum.fromArray(out);
 }
 
+const IfElseListKind = enum {
+    list,
+    large_list,
+};
+
+fn mapConcatArrayError(err: anyerror) compute.KernelError {
+    return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.UnsupportedType => error.UnsupportedType,
+        else => error.InvalidInput,
+    };
+}
+
+fn listValuesRefFromArray(array_ref: zcore.ArrayRef, kind: IfElseListKind) compute.KernelError!zcore.ArrayRef {
+    return switch (kind) {
+        .list => blk: {
+            if (array_ref.data().data_type != .list) return error.InvalidInput;
+            const list_array = zcore.ListArray{ .data = array_ref.data() };
+            break :blk list_array.valuesRef().retain();
+        },
+        .large_list => blk: {
+            if (array_ref.data().data_type != .large_list) return error.InvalidInput;
+            const list_array = zcore.LargeListArray{ .data = array_ref.data() };
+            break :blk list_array.valuesRef().retain();
+        },
+    };
+}
+
+fn firstListValuesRefFromDatum(datum: compute.Datum, kind: IfElseListKind) compute.KernelError!zcore.ArrayRef {
+    return switch (datum) {
+        .array => |array_ref| listValuesRefFromArray(array_ref, kind),
+        .chunked => |chunks| blk: {
+            if (chunks.numChunks() == 0) return error.InvalidInput;
+            const chunk = chunks.chunk(0).*;
+            break :blk listValuesRefFromArray(chunk, kind);
+        },
+        .scalar => error.InvalidInput,
+    };
+}
+
+fn extractListValueSlice(
+    value: compute.ExecChunkValue,
+    logical_index: usize,
+    kind: IfElseListKind,
+) compute.KernelError!zcore.ArrayRef {
+    return switch (value) {
+        .array => |array_ref| switch (kind) {
+            .list => blk: {
+                if (array_ref.data().data_type != .list) return error.InvalidInput;
+                const list_array = zcore.ListArray{ .data = array_ref.data() };
+                break :blk list_array.value(logical_index) catch |err| return mapSelectionInputError(err);
+            },
+            .large_list => blk: {
+                if (array_ref.data().data_type != .large_list) return error.InvalidInput;
+                const list_array = zcore.LargeListArray{ .data = array_ref.data() };
+                break :blk list_array.value(logical_index) catch |err| return mapSelectionInputError(err);
+            },
+        },
+        .scalar => error.InvalidInput,
+    };
+}
+
+fn concatSelectedListValues(
+    allocator: std.mem.Allocator,
+    value_type: compute.DataType,
+    selected_values: []const zcore.ArrayRef,
+    args: []const compute.Datum,
+    kind: IfElseListKind,
+) compute.KernelError!zcore.ArrayRef {
+    if (selected_values.len == 0) {
+        var source_values = firstListValuesRefFromDatum(args[1], kind) catch blk: {
+            break :blk try firstListValuesRefFromDatum(args[2], kind);
+        };
+        defer source_values.release();
+        return source_values.slice(0, 0) catch |err| return mapSelectionInputError(err);
+    }
+
+    return compute.concatArrayRefs(allocator, value_type, selected_values) catch |err| return mapConcatArrayError(err);
+}
+
+fn ifElseListKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    data_type: compute.DataType,
+) compute.KernelError!compute.Datum {
+    const out_len = try inferTernaryExecLen(args[0], args[1], args[2]);
+    const selected_values = ctx.tempAllocator().alloc(zcore.ArrayRef, out_len) catch return error.OutOfMemory;
+    var selected_count: usize = 0;
+    defer {
+        while (selected_count > 0) {
+            selected_count -= 1;
+            var value = selected_values[selected_count];
+            value.release();
+        }
+        ctx.tempAllocator().free(selected_values);
+    }
+
+    var cond_iter = compute.UnaryExecChunkIterator.init(args[0]);
+    var values_iter = try compute.BinaryExecChunkIterator.init(args[1], args[2]);
+    var cond_chunk_opt: ?compute.UnaryExecChunk = null;
+    defer if (cond_chunk_opt) |*c| c.deinit();
+    var values_chunk_opt: ?compute.BinaryExecChunk = null;
+    defer if (values_chunk_opt) |*c| c.deinit();
+    var cond_index: usize = 0;
+    var values_index: usize = 0;
+    var produced: usize = 0;
+
+    return switch (data_type) {
+        .list => |list_type| blk: {
+            var builder = try zcore.ListBuilder.init(ctx.tempAllocator(), out_len, list_type.value_field);
+            defer builder.deinit();
+
+            while (produced < out_len) {
+                try ensureUnaryChunk(&cond_iter, &cond_chunk_opt, &cond_index);
+                try ensureBinaryChunk(&values_iter, &values_chunk_opt, &values_index);
+                if (cond_chunk_opt == null or values_chunk_opt == null) return error.InvalidInput;
+
+                const cond_chunk = &cond_chunk_opt.?;
+                const values_chunk = &values_chunk_opt.?;
+                const run_len = @min(cond_chunk.len - cond_index, values_chunk.len - values_index);
+                var j: usize = 0;
+                while (j < run_len) : (j += 1) {
+                    const ci = cond_index + j;
+                    const vi = values_index + j;
+                    if (cond_chunk.values.isNullAt(ci)) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+
+                    const take_lhs = try common.readBool(cond_chunk.values, ci);
+                    const selected = if (take_lhs) values_chunk.lhs else values_chunk.rhs;
+                    if (selected.isNullAt(vi)) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+
+                    const value = try extractListValueSlice(selected, vi, .list);
+                    const value_len = value.data().length;
+                    builder.appendLen(value_len) catch |err| return common.kernelAppendError(err);
+                    selected_values[selected_count] = value;
+                    selected_count += 1;
+                }
+
+                produced += run_len;
+                cond_index += run_len;
+                values_index += run_len;
+            }
+
+            var merged_values = try concatSelectedListValues(
+                ctx.tempAllocator(),
+                list_type.value_field.data_type.*,
+                selected_values[0..selected_count],
+                args,
+                .list,
+            );
+            defer merged_values.release();
+
+            const out = builder.finish(merged_values) catch |err| return common.kernelAppendError(err);
+            break :blk compute.Datum.fromArray(out);
+        },
+        .large_list => |list_type| blk: {
+            var builder = try zcore.LargeListBuilder.init(ctx.tempAllocator(), out_len, list_type.value_field);
+            defer builder.deinit();
+
+            while (produced < out_len) {
+                try ensureUnaryChunk(&cond_iter, &cond_chunk_opt, &cond_index);
+                try ensureBinaryChunk(&values_iter, &values_chunk_opt, &values_index);
+                if (cond_chunk_opt == null or values_chunk_opt == null) return error.InvalidInput;
+
+                const cond_chunk = &cond_chunk_opt.?;
+                const values_chunk = &values_chunk_opt.?;
+                const run_len = @min(cond_chunk.len - cond_index, values_chunk.len - values_index);
+                var j: usize = 0;
+                while (j < run_len) : (j += 1) {
+                    const ci = cond_index + j;
+                    const vi = values_index + j;
+                    if (cond_chunk.values.isNullAt(ci)) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+
+                    const take_lhs = try common.readBool(cond_chunk.values, ci);
+                    const selected = if (take_lhs) values_chunk.lhs else values_chunk.rhs;
+                    if (selected.isNullAt(vi)) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+
+                    const value = try extractListValueSlice(selected, vi, .large_list);
+                    const value_len = value.data().length;
+                    builder.appendLen(value_len) catch |err| return common.kernelAppendError(err);
+                    selected_values[selected_count] = value;
+                    selected_count += 1;
+                }
+
+                produced += run_len;
+                cond_index += run_len;
+                values_index += run_len;
+            }
+
+            var merged_values = try concatSelectedListValues(
+                ctx.tempAllocator(),
+                list_type.value_field.data_type.*,
+                selected_values[0..selected_count],
+                args,
+                .large_list,
+            );
+            defer merged_values.release();
+
+            const out = builder.finish(merged_values) catch |err| return common.kernelAppendError(err);
+            break :blk compute.Datum.fromArray(out);
+        },
+        else => error.UnsupportedType,
+    };
+}
+
 pub fn ifElseKernel(
     ctx: *compute.ExecContext,
     args: []const compute.Datum,
@@ -620,6 +836,7 @@ pub fn ifElseKernel(
         .binary => ifElseBinaryKernel(ctx, args, .binary),
         .large_binary => ifElseBinaryKernel(ctx, args, .large_binary),
         .binary_view => ifElseBinaryKernel(ctx, args, .binary_view),
+        .list, .large_list => ifElseListKernel(ctx, args, data_type),
         .struct_ => ifElseStructKernel(ctx, args, data_type),
         else => blk: {
             if (!common.isFilterFixedWidthType(data_type)) break :blk error.UnsupportedType;

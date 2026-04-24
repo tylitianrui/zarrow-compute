@@ -88,6 +88,8 @@ pub fn isFilterSupportedType(data_type: compute.DataType) bool {
 
 pub fn isIfElseSupportedType(data_type: compute.DataType) bool {
     return switch (data_type) {
+        .list => |list_type| isIfElseSupportedType(list_type.value_field.data_type.*),
+        .large_list => |list_type| isIfElseSupportedType(list_type.value_field.data_type.*),
         .struct_ => |struct_type| blk: {
             for (struct_type.fields) |field| {
                 if (!isIfElseSupportedType(field.data_type.*)) break :blk false;
