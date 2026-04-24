@@ -14,7 +14,7 @@ It reuses the compute framework layer (`zarrow-core`) from [`tylitianrui/zarrow`
 - `if_else` (vector, first version supports fixed-width + string/binary subset, `Options.none`)
 - `coalesce` (vector, variadic, select first non-null value, `Options.none`)
 - `choose` (vector, variadic, select value by 0-based index, `Options.none`)
-- `case_when` (vector, variadic condition-value pairs with optional else, `Options.none`)
+- `case_when` (vector, Arrow-native `struct<bool...> + *cases` with optional else; compatibility keeps variadic `cond,value` pairs, `Options.none`)
 - `subtract_i64` (vector)
 - `divide_i64` (vector)
 - `multiply_i64` (vector)

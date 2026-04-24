@@ -142,7 +142,7 @@ pub fn variadicChooseSupported(args: []const compute.Datum) bool {
     return true;
 }
 
-pub fn variadicCaseWhenSupported(args: []const compute.Datum) bool {
+fn caseWhenPairsSupported(args: []const compute.Datum) bool {
     if (args.len < 2) return false;
     const has_else = (args.len % 2) == 1;
     const pair_count = if (has_else) (args.len - 1) / 2 else args.len / 2;
@@ -161,6 +161,35 @@ pub fn variadicCaseWhenSupported(args: []const compute.Datum) bool {
 
     if (has_else and !args[args.len - 1].dataType().eql(first_value_type)) return false;
     return true;
+}
+
+fn caseWhenStructSupported(args: []const compute.Datum) bool {
+    if (args.len < 2) return false;
+    if (!(args[0].isArray() or args[0].isChunked())) return false;
+
+    const cond_struct = switch (args[0].dataType()) {
+        .struct_ => |value| value,
+        else => return false,
+    };
+    const cond_count = cond_struct.fields.len;
+    if (cond_count == 0) return false;
+    for (cond_struct.fields) |field| {
+        if (!field.data_type.*.eql(.{ .bool = {} })) return false;
+    }
+
+    const value_count = args.len - 1;
+    if (!(value_count == cond_count or value_count == cond_count + 1)) return false;
+
+    const first_value_type = args[1].dataType();
+    if (!isFilterSupportedType(first_value_type)) return false;
+    for (args[2..]) |arg| {
+        if (!arg.dataType().eql(first_value_type)) return false;
+    }
+    return true;
+}
+
+pub fn variadicCaseWhenSupported(args: []const compute.Datum) bool {
+    return caseWhenStructSupported(args) or caseWhenPairsSupported(args);
 }
 
 pub fn resultI64(args: []const compute.Datum, options: compute.Options) compute.KernelError!compute.DataType {

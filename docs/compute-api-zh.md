@@ -21,7 +21,7 @@
 - `if_else`（vector，第一版支持 `fixed-width + string/binary` 子集）
 - `coalesce`（vector，可变参数，按行选择第一个非 null）
 - `choose`（vector，可变参数，按 0-based 索引选择值）
-- `case_when`（vector，可变参数条件-值对，支持可选 else）
+- `case_when`（vector，主入口为 Arrow 原生 `struct<bool...> + *cases`，支持可选 else，并兼容旧的 `cond,value` 可变参数形态）
 - `subtract_i64`（vector）
 - `divide_i64`（vector）
 - `multiply_i64`（vector）
@@ -63,7 +63,7 @@
 - `if_else` 仅接受 `Options.none`（`condition` 为 null 输出 null；`true` 选左值；`false` 选右值；当前支持 `fixed-width + string/binary` 子集）
 - `coalesce` 仅接受 `Options.none`（按行返回首个非 null 值，若全部为 null 则输出 null）
 - `choose` 仅接受 `Options.none`（第一个参数为索引，索引 null 输出 null，越界返回 `InvalidInput`）
-- `case_when` 仅接受 `Options.none`（参数为 `cond_0, value_0, cond_1, value_1, ... [, else]`，按首个 true 条件选值）
+- `case_when` 仅接受 `Options.none`（主形态参数为 `conds_struct, case_0, case_1, ... [, else]`，其中 `conds_struct` 为 `struct<bool...>`；兼容 `cond_0, value_0, cond_1, value_1, ... [, else]`，按首个 true 条件选值）
 - `cast_i64_to_i32` 仅接受 `Options.cast`
 - `count_rows` 仅接受 `Options.none`
 

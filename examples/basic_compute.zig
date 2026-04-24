@@ -49,6 +49,33 @@ fn makeBoolArray(allocator: std.mem.Allocator, values: []const ?bool) !zcore.Arr
     return builder.finish();
 }
 
+fn makeStructBool2Array(
+    allocator: std.mem.Allocator,
+    cond0: zcore.ArrayRef,
+    cond1: zcore.ArrayRef,
+) !zcore.ArrayRef {
+    if (!cond0.data().data_type.eql(.{ .bool = {} }) or !cond1.data().data_type.eql(.{ .bool = {} })) {
+        return error.InvalidInput;
+    }
+    if (cond0.data().length != cond1.data().length) return error.InvalidInput;
+
+    const bool_type_0 = zcore.DataType{ .bool = {} };
+    const bool_type_1 = zcore.DataType{ .bool = {} };
+    const fields = &[_]zcore.Field{
+        .{ .name = "c0", .data_type = &bool_type_0, .nullable = true },
+        .{ .name = "c1", .data_type = &bool_type_1, .nullable = true },
+    };
+
+    var builder = zcore.StructBuilder.init(allocator, fields);
+    defer builder.deinit();
+    var row: usize = 0;
+    while (row < cond0.data().length) : (row += 1) {
+        try builder.appendValid();
+    }
+
+    return builder.finish(&[_]zcore.ArrayRef{ cond0, cond1 });
+}
+
 fn printInt64DatumLine(label: []const u8, datum: compute.Datum) !void {
     if (!datum.isArray()) return error.InvalidInput;
     const view = zcore.Int64Array{ .data = datum.array.data() };
@@ -237,10 +264,11 @@ pub fn main() !void {
     defer case_cond0.release();
     var case_cond1 = try makeBoolArray(allocator, &[_]?bool{ true, false, null });
     defer case_cond1.release();
+    var case_conds = try makeStructBool2Array(allocator, case_cond0, case_cond1);
+    defer case_conds.release();
     const case_when_args = [_]compute.Datum{
-        compute.Datum.fromArray(case_cond0.retain()),
+        compute.Datum.fromArray(case_conds.retain()),
         compute.Datum.fromArray(left.retain()),
-        compute.Datum.fromArray(case_cond1.retain()),
         compute.Datum.fromScalar(.{
             .data_type = .{ .int64 = {} },
             .value = .{ .i64 = 10 },
@@ -256,10 +284,6 @@ pub fn main() !void {
     }
     defer {
         var d = case_when_args[2];
-        d.release();
-    }
-    defer {
-        var d = case_when_args[3];
         d.release();
     }
     var case_when_out = try ctx.invokeVector("case_when", case_when_args[0..], compute.Options.noneValue());

@@ -1,3 +1,4 @@
+const std = @import("std");
 const zcore = @import("zarrow-core");
 const common = @import("common.zig");
 
@@ -461,6 +462,27 @@ const SelectionConfig = struct {
     has_else: bool = false,
 };
 
+const CaseWhenCompatArgs = struct {
+    allocator: std.mem.Allocator,
+    args: []compute.Datum,
+    config: SelectionConfig,
+
+    fn deinit(self: *CaseWhenCompatArgs) void {
+        for (self.args) |*arg| {
+            arg.release();
+        }
+        self.allocator.free(self.args);
+        self.* = undefined;
+    }
+};
+
+fn mapSelectionInputError(err: anyerror) compute.KernelError {
+    return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => error.InvalidInput,
+    };
+}
+
 fn parseCaseWhenConfig(args: []const compute.Datum) compute.KernelError!SelectionConfig {
     if (args.len < 2) return error.InvalidArity;
     const has_else = (args.len % 2) == 1;
@@ -470,6 +492,117 @@ fn parseCaseWhenConfig(args: []const compute.Datum) compute.KernelError!Selectio
         .kind = .case_when,
         .case_pair_count = case_pair_count,
         .has_else = has_else,
+    };
+}
+
+fn parseCaseWhenStructConfig(args: []const compute.Datum) compute.KernelError!SelectionConfig {
+    if (args.len < 2) return error.InvalidArity;
+    const cond_struct = switch (args[0].dataType()) {
+        .struct_ => |value| value,
+        else => return error.InvalidInput,
+    };
+    const case_pair_count = cond_struct.fields.len;
+    if (case_pair_count == 0) return error.InvalidArity;
+
+    const value_count = args.len - 1;
+    const has_else = value_count == case_pair_count + 1;
+    if (!(value_count == case_pair_count or has_else)) return error.InvalidArity;
+
+    return .{
+        .kind = .case_when,
+        .case_pair_count = case_pair_count,
+        .has_else = has_else,
+    };
+}
+
+fn extractCaseWhenStructFieldDatum(
+    allocator: std.mem.Allocator,
+    struct_conditions: compute.Datum,
+    field_index: usize,
+    field_type: compute.DataType,
+) compute.KernelError!compute.Datum {
+    return switch (struct_conditions) {
+        .array => |struct_array_ref| blk: {
+            const struct_array = zcore.StructArray{ .data = struct_array_ref.data() };
+            if (field_index >= struct_array.fieldCount()) return error.InvalidInput;
+            const child = struct_array.field(field_index) catch |err| return mapSelectionInputError(err);
+            break :blk compute.Datum.fromArray(child);
+        },
+        .chunked => |struct_chunks| blk: {
+            const chunk_count = struct_chunks.numChunks();
+            const child_chunks = allocator.alloc(zcore.ArrayRef, chunk_count) catch return error.OutOfMemory;
+            var initialized: usize = 0;
+            errdefer {
+                while (initialized > 0) {
+                    initialized -= 1;
+                    child_chunks[initialized].release();
+                }
+                allocator.free(child_chunks);
+            }
+
+            var chunk_index: usize = 0;
+            while (chunk_index < chunk_count) : (chunk_index += 1) {
+                const struct_chunk = struct_chunks.chunk(chunk_index).*;
+                const struct_array = zcore.StructArray{ .data = struct_chunk.data() };
+                if (field_index >= struct_array.fieldCount()) return error.InvalidInput;
+                child_chunks[chunk_index] = struct_array.field(field_index) catch |err| return mapSelectionInputError(err);
+                initialized += 1;
+            }
+
+            const child_chunked = zcore.ChunkedArray.init(allocator, field_type, child_chunks) catch |err| return mapSelectionInputError(err);
+            for (child_chunks) |*child_chunk| {
+                child_chunk.release();
+            }
+            allocator.free(child_chunks);
+            break :blk compute.Datum.fromChunked(child_chunked);
+        },
+        .scalar => error.InvalidInput,
+    };
+}
+
+fn buildCaseWhenCompatArgsFromStruct(
+    allocator: std.mem.Allocator,
+    args: []const compute.Datum,
+) compute.KernelError!CaseWhenCompatArgs {
+    const config = try parseCaseWhenStructConfig(args);
+    const cond_struct = args[0].dataType().struct_;
+
+    const compat_len = config.case_pair_count * 2 + (if (config.has_else) @as(usize, 1) else @as(usize, 0));
+    const compat_args = allocator.alloc(compute.Datum, compat_len) catch return error.OutOfMemory;
+    var initialized: usize = 0;
+    errdefer {
+        while (initialized > 0) {
+            initialized -= 1;
+            var datum = compat_args[initialized];
+            datum.release();
+        }
+        allocator.free(compat_args);
+    }
+
+    var pair_index: usize = 0;
+    while (pair_index < config.case_pair_count) : (pair_index += 1) {
+        const cond_arg_index = pair_index * 2;
+        compat_args[cond_arg_index] = try extractCaseWhenStructFieldDatum(
+            allocator,
+            args[0],
+            pair_index,
+            cond_struct.fields[pair_index].data_type.*,
+        );
+        initialized += 1;
+
+        compat_args[cond_arg_index + 1] = args[pair_index + 1].retain();
+        initialized += 1;
+    }
+
+    if (config.has_else) {
+        compat_args[compat_args.len - 1] = args[args.len - 1].retain();
+        initialized += 1;
+    }
+
+    return .{
+        .allocator = allocator,
+        .args = compat_args,
+        .config = config,
     };
 }
 
@@ -891,6 +1024,11 @@ pub fn caseWhenKernel(
     if (args.len < 2) return error.InvalidArity;
     if (!common.onlyNoOptions(options)) return error.InvalidOptions;
     if (!common.variadicCaseWhenSupported(args)) return error.InvalidInput;
+    if (args[0].dataType() == .struct_) {
+        var compat = try buildCaseWhenCompatArgsFromStruct(ctx.tempAllocator(), args);
+        defer compat.deinit();
+        return runSelectionKernel(ctx, compat.args, compat.config, args[1].dataType());
+    }
     const config = try parseCaseWhenConfig(args);
     return runSelectionKernel(ctx, args, config, args[1].dataType());
 }
