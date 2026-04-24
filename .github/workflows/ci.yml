@@ -18,6 +18,7 @@ jobs:
       fail-fast: false
       matrix:
         zig-version:
+          - 0.15.0
           - 0.15.1
           - 0.15.2
 
@@ -36,8 +37,8 @@ jobs:
       - name: Lint (zig fmt check)
         run: zig fmt --check build.zig src examples
 
-      - name: Workaround zarrow v0.0.2 build script on Zig 0.15.1
-        if: matrix.zig-version == '0.15.1'
+      - name: Workaround zarrow v0.0.2 build script on Zig 0.15.0/0.15.1
+        if: matrix.zig-version == '0.15.0' || matrix.zig-version == '0.15.1'
         run: |
           set -euo pipefail
           HASH="$(zig fetch --global-cache-dir "${{ runner.temp }}/zig-global-cache" https://github.com/tylitianrui/zarrow/archive/refs/tags/v0.0.2.tar.gz)"

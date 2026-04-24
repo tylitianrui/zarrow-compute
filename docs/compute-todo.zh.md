@@ -399,7 +399,7 @@
 - [ ] null 语义：默认、Kleene、`skip_nulls`、`drop_nulls` 等行为可测试。
 - [ ] options 对齐：Arrow 对应 options 字段均有校验与默认值。
 - [ ] 错误语义：`InvalidInput/InvalidOptions/Overflow/InvalidCast` 等映射稳定。
-- [ ] CI 回归：Zig `0.15.1` 与 `0.15.2` 双版本全绿。
+- [ ] CI 回归：Zig `0.15.0` / `0.15.1` / `0.15.2` 三版本全绿。
 
 ## 29. 参考
 
