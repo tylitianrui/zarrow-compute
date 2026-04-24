@@ -87,7 +87,15 @@ pub fn isFilterSupportedType(data_type: compute.DataType) bool {
 }
 
 pub fn isIfElseSupportedType(data_type: compute.DataType) bool {
-    return isFilterSupportedType(data_type);
+    return switch (data_type) {
+        .struct_ => |struct_type| blk: {
+            for (struct_type.fields) |field| {
+                if (!isIfElseSupportedType(field.data_type.*)) break :blk false;
+            }
+            break :blk true;
+        },
+        else => isFilterSupportedType(data_type),
+    };
 }
 
 pub fn binarySupportedFilter(args: []const compute.Datum) bool {

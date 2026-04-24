@@ -3,6 +3,11 @@ const zcore = @import("zarrow-core");
 const zcompute = @import("zarrow_compute");
 
 const compute = zcore.compute;
+const DT_BOOL = zcore.DataType{ .bool = {} };
+const STRUCT_FIELDS_BOOL2 = [_]zcore.Field{
+    .{ .name = "c0", .data_type = &DT_BOOL, .nullable = true },
+    .{ .name = "c1", .data_type = &DT_BOOL, .nullable = true },
+};
 
 fn makeInt64Array(allocator: std.mem.Allocator, values: []const ?i64) !zcore.ArrayRef {
     var builder = try zcore.Int64Builder.init(allocator, values.len);
@@ -59,14 +64,7 @@ fn makeStructBool2Array(
     }
     if (cond0.data().length != cond1.data().length) return error.InvalidInput;
 
-    const bool_type_0 = zcore.DataType{ .bool = {} };
-    const bool_type_1 = zcore.DataType{ .bool = {} };
-    const fields = &[_]zcore.Field{
-        .{ .name = "c0", .data_type = &bool_type_0, .nullable = true },
-        .{ .name = "c1", .data_type = &bool_type_1, .nullable = true },
-    };
-
-    var builder = zcore.StructBuilder.init(allocator, fields);
+    var builder = zcore.StructBuilder.init(allocator, STRUCT_FIELDS_BOOL2[0..]);
     defer builder.deinit();
     var row: usize = 0;
     while (row < cond0.data().length) : (row += 1) {

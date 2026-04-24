@@ -495,6 +495,111 @@ fn ifElseFixedWidthKernel(
     return compute.Datum.fromArray(array_ref);
 }
 
+fn ifElseStructKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    data_type: compute.DataType,
+) compute.KernelError!compute.Datum {
+    const struct_type = data_type.struct_;
+    const out_len = try inferTernaryExecLen(args[0], args[1], args[2]);
+
+    var validity = try zcore.OwnedBuffer.init(ctx.tempAllocator(), common.bitByteLength(out_len));
+    defer validity.deinit();
+    var null_count: usize = 0;
+
+    var cond_iter = compute.UnaryExecChunkIterator.init(args[0]);
+    var values_iter = try compute.BinaryExecChunkIterator.init(args[1], args[2]);
+    var cond_chunk_opt: ?compute.UnaryExecChunk = null;
+    defer if (cond_chunk_opt) |*c| c.deinit();
+    var values_chunk_opt: ?compute.BinaryExecChunk = null;
+    defer if (values_chunk_opt) |*c| c.deinit();
+    var cond_index: usize = 0;
+    var values_index: usize = 0;
+    var produced: usize = 0;
+
+    while (produced < out_len) {
+        try ensureUnaryChunk(&cond_iter, &cond_chunk_opt, &cond_index);
+        try ensureBinaryChunk(&values_iter, &values_chunk_opt, &values_index);
+        if (cond_chunk_opt == null or values_chunk_opt == null) return error.InvalidInput;
+
+        const cond_chunk = &cond_chunk_opt.?;
+        const values_chunk = &values_chunk_opt.?;
+        const run_len = @min(cond_chunk.len - cond_index, values_chunk.len - values_index);
+        var j: usize = 0;
+        while (j < run_len) : (j += 1) {
+            const ci = cond_index + j;
+            const vi = values_index + j;
+            const out_i = produced + j;
+            if (cond_chunk.values.isNullAt(ci)) {
+                null_count += 1;
+                continue;
+            }
+            const take_lhs = try common.readBool(cond_chunk.values, ci);
+            const selected = if (take_lhs) values_chunk.lhs else values_chunk.rhs;
+            if (selected.isNullAt(vi)) {
+                null_count += 1;
+                continue;
+            }
+            common.setBit(validity.data[0..], out_i);
+        }
+
+        produced += run_len;
+        cond_index += run_len;
+        values_index += run_len;
+    }
+
+    const children = ctx.tempAllocator().alloc(zcore.ArrayRef, struct_type.fields.len) catch return error.OutOfMemory;
+    var child_count: usize = 0;
+    errdefer {
+        while (child_count > 0) {
+            child_count -= 1;
+            var child = children[child_count];
+            child.release();
+        }
+        ctx.tempAllocator().free(children);
+    }
+
+    for (struct_type.fields, 0..) |field, field_index| {
+        var child_cond = args[0].retain();
+        defer child_cond.release();
+        var child_lhs = try extractStructFieldDatum(ctx.tempAllocator(), args[1], field_index, field.data_type.*);
+        defer child_lhs.release();
+        var child_rhs = try extractStructFieldDatum(ctx.tempAllocator(), args[2], field_index, field.data_type.*);
+        defer child_rhs.release();
+
+        const child_args = [_]compute.Datum{
+            child_cond,
+            child_lhs,
+            child_rhs,
+        };
+        var child_out = try ifElseKernel(ctx, child_args[0..], compute.Options.noneValue());
+        defer child_out.release();
+        if (!child_out.isArray()) return error.InvalidInput;
+        children[field_index] = child_out.array.retain();
+        child_count += 1;
+    }
+
+    const validity_shared = if (null_count == 0)
+        zcore.SharedBuffer.empty
+    else
+        validity.toShared(common.bitByteLength(out_len)) catch |err| return common.kernelAppendError(err);
+    errdefer if (null_count != 0) {
+        var owned = validity_shared;
+        owned.release();
+    };
+
+    const buffers = ctx.tempAllocator().alloc(zcore.SharedBuffer, 1) catch return error.OutOfMemory;
+    buffers[0] = validity_shared;
+    const out = zcore.ArrayRef.fromOwnedUnsafe(ctx.tempAllocator(), .{
+        .data_type = data_type,
+        .length = out_len,
+        .null_count = null_count,
+        .buffers = buffers,
+        .children = children,
+    }) catch return error.OutOfMemory;
+    return compute.Datum.fromArray(out);
+}
+
 pub fn ifElseKernel(
     ctx: *compute.ExecContext,
     args: []const compute.Datum,
@@ -515,6 +620,7 @@ pub fn ifElseKernel(
         .binary => ifElseBinaryKernel(ctx, args, .binary),
         .large_binary => ifElseBinaryKernel(ctx, args, .large_binary),
         .binary_view => ifElseBinaryKernel(ctx, args, .binary_view),
+        .struct_ => ifElseStructKernel(ctx, args, data_type),
         else => blk: {
             if (!common.isFilterFixedWidthType(data_type)) break :blk error.UnsupportedType;
             break :blk ifElseFixedWidthKernel(ctx, args, data_type);
@@ -575,7 +681,7 @@ fn parseCaseWhenStructConfig(args: []const compute.Datum) compute.KernelError!Se
     };
 }
 
-fn extractCaseWhenStructFieldDatum(
+fn extractStructFieldDatum(
     allocator: std.mem.Allocator,
     struct_conditions: compute.Datum,
     field_index: usize,
@@ -642,7 +748,7 @@ fn buildCaseWhenStructArgs(
     var pair_index: usize = 0;
     while (pair_index < config.case_pair_count) : (pair_index += 1) {
         const cond_arg_index = pair_index * 2;
-        pair_args[cond_arg_index] = try extractCaseWhenStructFieldDatum(
+        pair_args[cond_arg_index] = try extractStructFieldDatum(
             allocator,
             args[0],
             pair_index,

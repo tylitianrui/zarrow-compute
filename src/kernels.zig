@@ -6,6 +6,27 @@ pub const compute = impl.compute;
 pub const registerBaseKernels = impl.registerBaseKernels;
 pub const registerCompatKernels = impl.registerCompatKernels;
 
+const DT_BOOL = zcore.DataType{ .bool = {} };
+const DT_INT32 = zcore.DataType{ .int32 = {} };
+const DT_INT64 = zcore.DataType{ .int64 = {} };
+const FIELD_LIST_ITEM_I32 = zcore.Field{
+    .name = "item",
+    .data_type = &DT_INT32,
+    .nullable = true,
+};
+const DT_LIST_I32 = zcore.DataType{ .list = .{ .value_field = FIELD_LIST_ITEM_I32 } };
+const STRUCT_FIELDS_I64_BOOL = [_]zcore.Field{
+    .{ .name = "i64", .data_type = &DT_INT64, .nullable = true },
+    .{ .name = "b", .data_type = &DT_BOOL, .nullable = true },
+};
+const STRUCT_FIELDS_BOOL2 = [_]zcore.Field{
+    .{ .name = "c0", .data_type = &DT_BOOL, .nullable = true },
+    .{ .name = "c1", .data_type = &DT_BOOL, .nullable = true },
+};
+const STRUCT_FIELDS_LIST_I32 = [_]zcore.Field{
+    .{ .name = "items", .data_type = &DT_LIST_I32, .nullable = true },
+};
+
 fn makeInt64Array(allocator: std.mem.Allocator, values: []const ?i64) !zcore.ArrayRef {
     var builder = try zcore.Int64Builder.init(allocator, values.len);
     defer builder.deinit();
@@ -52,6 +73,48 @@ fn makeNullArray(allocator: std.mem.Allocator, len: usize) !zcore.ArrayRef {
     return builder.finish();
 }
 
+fn makeStructI64BoolArray(
+    allocator: std.mem.Allocator,
+    present: []const bool,
+    ints: []const ?i64,
+    bools: []const ?bool,
+) !zcore.ArrayRef {
+    if (present.len != ints.len or present.len != bools.len) return error.InvalidInput;
+    var int_child = try makeInt64Array(allocator, ints);
+    defer int_child.release();
+    var bool_child = try makeBoolArray(allocator, bools);
+    defer bool_child.release();
+
+    var builder = zcore.StructBuilder.init(allocator, STRUCT_FIELDS_I64_BOOL[0..]);
+    defer builder.deinit();
+    for (present) |is_present| {
+        if (is_present) {
+            try builder.appendValid();
+        } else {
+            try builder.appendNull();
+        }
+    }
+    return builder.finish(&[_]zcore.ArrayRef{ int_child, bool_child });
+}
+
+fn makeStructListI32Array(
+    allocator: std.mem.Allocator,
+    field_child: zcore.ArrayRef,
+    present: []const bool,
+) !zcore.ArrayRef {
+    if (present.len != field_child.data().length) return error.InvalidInput;
+    var builder = zcore.StructBuilder.init(allocator, STRUCT_FIELDS_LIST_I32[0..]);
+    defer builder.deinit();
+    for (present) |is_present| {
+        if (is_present) {
+            try builder.appendValid();
+        } else {
+            try builder.appendNull();
+        }
+    }
+    return builder.finish(&[_]zcore.ArrayRef{field_child});
+}
+
 fn makeStructBool2Array(
     allocator: std.mem.Allocator,
     cond0: zcore.ArrayRef,
@@ -62,14 +125,7 @@ fn makeStructBool2Array(
     }
     if (cond0.data().length != cond1.data().length) return error.InvalidInput;
 
-    const bool_type_0 = zcore.DataType{ .bool = {} };
-    const bool_type_1 = zcore.DataType{ .bool = {} };
-    const fields = &[_]zcore.Field{
-        .{ .name = "c0", .data_type = &bool_type_0, .nullable = true },
-        .{ .name = "c1", .data_type = &bool_type_1, .nullable = true },
-    };
-
-    var builder = zcore.StructBuilder.init(allocator, fields);
+    var builder = zcore.StructBuilder.init(allocator, STRUCT_FIELDS_BOOL2[0..]);
     defer builder.deinit();
     var row: usize = 0;
     while (row < cond0.data().length) : (row += 1) {
@@ -178,13 +234,6 @@ fn makeFixedSizeBinaryArray(allocator: std.mem.Allocator, byte_width: usize, val
 }
 
 fn makeListInt32Array(allocator: std.mem.Allocator) !zcore.ArrayRef {
-    const value_type = zcore.DataType{ .int32 = {} };
-    const field = zcore.Field{
-        .name = "item",
-        .data_type = &value_type,
-        .nullable = true,
-    };
-
     var values_builder = try zcore.Int32Builder.init(allocator, 3);
     defer values_builder.deinit();
     try values_builder.append(1);
@@ -193,7 +242,7 @@ fn makeListInt32Array(allocator: std.mem.Allocator) !zcore.ArrayRef {
     var values = try values_builder.finish();
     defer values.release();
 
-    var list_builder = try zcore.ListBuilder.init(allocator, 2, field);
+    var list_builder = try zcore.ListBuilder.init(allocator, 2, FIELD_LIST_ITEM_I32);
     defer list_builder.deinit();
     try list_builder.appendLen(2);
     try list_builder.appendLen(1);
@@ -1388,6 +1437,105 @@ test "if_else supports null type" {
     try std.testing.expect(view.isNull(1));
     try std.testing.expect(view.isNull(2));
     try std.testing.expect(view.isNull(3));
+}
+
+test "if_else supports struct values with parent null propagation" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var cond = try makeBoolArray(allocator, &[_]?bool{ true, false, null, true });
+    defer cond.release();
+    var lhs = try makeStructI64BoolArray(
+        allocator,
+        &[_]bool{ true, true, true, false },
+        &[_]?i64{ 1, 2, 3, 4 },
+        &[_]?bool{ true, false, true, false },
+    );
+    defer lhs.release();
+    var rhs = try makeStructI64BoolArray(
+        allocator,
+        &[_]bool{ true, false, true, true },
+        &[_]?i64{ 10, 20, 30, 40 },
+        &[_]?bool{ false, true, false, true },
+    );
+    defer rhs.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(cond.retain()),
+        compute.Datum.fromArray(lhs.retain()),
+        compute.Datum.fromArray(rhs.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("if_else", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .struct_);
+
+    const out_struct = zcore.StructArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 4), out_struct.len());
+    try std.testing.expect(!out_struct.isNull(0));
+    try std.testing.expect(out_struct.isNull(1));
+    try std.testing.expect(out_struct.isNull(2));
+    try std.testing.expect(out_struct.isNull(3));
+
+    const out_i64 = zcore.Int64Array{ .data = out_struct.fieldRef(0).data() };
+    const out_bool = zcore.BooleanArray{ .data = out_struct.fieldRef(1).data() };
+    try std.testing.expectEqual(@as(i64, 1), out_i64.value(0));
+    try std.testing.expectEqual(true, out_bool.value(0));
+}
+
+test "if_else rejects struct with unsupported list child at dispatch" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var cond = try makeBoolArray(allocator, &[_]?bool{ true, false });
+    defer cond.release();
+    var list_child = try makeListInt32Array(allocator);
+    defer list_child.release();
+    var lhs = try makeStructListI32Array(allocator, list_child, &[_]bool{ true, true });
+    defer lhs.release();
+    var rhs = try makeStructListI32Array(allocator, list_child, &[_]bool{ true, true });
+    defer rhs.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(cond.retain()),
+        compute.Datum.fromArray(lhs.retain()),
+        compute.Datum.fromArray(rhs.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+
+    try std.testing.expectError(
+        error.NoMatchingKernel,
+        ctx.invokeVector("if_else", args[0..], compute.Options.noneValue()),
+    );
 }
 
 test "if_else supports misaligned chunk boundaries across three inputs" {
