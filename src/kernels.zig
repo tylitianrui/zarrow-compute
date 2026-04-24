@@ -1802,26 +1802,34 @@ test "if_else supports misaligned chunk boundaries across three inputs" {
     try std.testing.expectEqual(@as(i32, 13), try view.value(3));
 }
 
-test "if_else rejects unsupported fixed_size_list value type at dispatch" {
+test "if_else supports fixed_size_list values with null propagation" {
     const allocator = std.testing.allocator;
     var registry = compute.FunctionRegistry.init(allocator);
     defer registry.deinit();
     try registerBaseKernels(&registry);
     var ctx = compute.ExecContext.init(allocator, &registry);
 
-    var cond = try makeBoolArray(allocator, &[_]?bool{ true, false });
+    var cond = try makeBoolArray(allocator, &[_]?bool{ true, false, null, true, false });
     defer cond.release();
-    var values = try makeFixedSizeListInt32Array(
+    var lhs = try makeFixedSizeListInt32Array(
         allocator,
         2,
-        &[_]bool{ true, true },
-        &[_]i32{ 1, 2, 3, 4 },
+        &[_]bool{ true, true, true, false, true },
+        &[_]i32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 },
     );
-    defer values.release();
+    defer lhs.release();
+    var rhs = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, false, true, true, true },
+        &[_]i32{ 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 },
+    );
+    defer rhs.release();
+
     const args = [_]compute.Datum{
         compute.Datum.fromArray(cond.retain()),
-        compute.Datum.fromArray(values.retain()),
-        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromArray(lhs.retain()),
+        compute.Datum.fromArray(rhs.retain()),
     };
     defer {
         var d = args[0];
@@ -1836,10 +1844,31 @@ test "if_else rejects unsupported fixed_size_list value type at dispatch" {
         d.release();
     }
 
-    try std.testing.expectError(
-        error.NoMatchingKernel,
-        ctx.invokeVector("if_else", args[0..], compute.Options.noneValue()),
-    );
+    var out = try ctx.invokeVector("if_else", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .fixed_size_list);
+
+    const out_list = zcore.FixedSizeListArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 5), out_list.len());
+    try std.testing.expectEqual(@as(usize, 2), out_list.listSize());
+    try std.testing.expect(!out_list.isNull(0));
+    try std.testing.expect(out_list.isNull(1));
+    try std.testing.expect(out_list.isNull(2));
+    try std.testing.expect(out_list.isNull(3));
+    try std.testing.expect(!out_list.isNull(4));
+
+    var row0 = try out_list.value(0);
+    defer row0.release();
+    const row0_i32 = zcore.Int32Array{ .data = row0.data() };
+    try std.testing.expectEqual(@as(i32, 1), row0_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 2), row0_i32.value(1));
+
+    var row4 = try out_list.value(4);
+    defer row4.release();
+    const row4_i32 = zcore.Int32Array{ .data = row4.data() };
+    try std.testing.expectEqual(@as(i32, 19), row4_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 20), row4_i32.value(1));
 }
 
 test "if_else rejects non-none options" {
@@ -2028,6 +2057,80 @@ test "coalesce supports list values with first-non-null semantics" {
     try std.testing.expectEqual(@as(i32, 3), row3_i32.value(1));
 
     try std.testing.expect(out_list.isNull(4));
+}
+
+test "coalesce supports fixed_size_list values with first-non-null semantics" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var lhs = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ false, true, false, true, false },
+        &[_]i32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 },
+    );
+    defer lhs.release();
+    var rhs = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, false, true, true, false },
+        &[_]i32{ 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 },
+    );
+    defer rhs.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(lhs.retain()),
+        compute.Datum.fromArray(rhs.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("coalesce", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .fixed_size_list);
+
+    const out_list = zcore.FixedSizeListArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 5), out_list.len());
+    try std.testing.expectEqual(@as(usize, 2), out_list.listSize());
+    try std.testing.expect(!out_list.isNull(0));
+    try std.testing.expect(!out_list.isNull(1));
+    try std.testing.expect(!out_list.isNull(2));
+    try std.testing.expect(!out_list.isNull(3));
+    try std.testing.expect(out_list.isNull(4));
+
+    var row0 = try out_list.value(0);
+    defer row0.release();
+    const row0_i32 = zcore.Int32Array{ .data = row0.data() };
+    try std.testing.expectEqual(@as(i32, 11), row0_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 12), row0_i32.value(1));
+
+    var row1 = try out_list.value(1);
+    defer row1.release();
+    const row1_i32 = zcore.Int32Array{ .data = row1.data() };
+    try std.testing.expectEqual(@as(i32, 3), row1_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 4), row1_i32.value(1));
+
+    var row2 = try out_list.value(2);
+    defer row2.release();
+    const row2_i32 = zcore.Int32Array{ .data = row2.data() };
+    try std.testing.expectEqual(@as(i32, 15), row2_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 16), row2_i32.value(1));
+
+    var row3 = try out_list.value(3);
+    defer row3.release();
+    const row3_i32 = zcore.Int32Array{ .data = row3.data() };
+    try std.testing.expectEqual(@as(i32, 7), row3_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 8), row3_i32.value(1));
 }
 
 test "coalesce supports struct values with first-non-null semantics" {
@@ -2221,6 +2324,80 @@ test "choose supports large_list values with null propagation" {
     try std.testing.expectEqual(@as(usize, 2), row4_i32.len());
     try std.testing.expectEqual(@as(i32, 13), row4_i32.value(0));
     try std.testing.expectEqual(@as(i32, 14), row4_i32.value(1));
+}
+
+test "choose supports fixed_size_list values with null propagation" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var indices = try makeInt32Array(allocator, &[_]?i32{ 0, 1, null, 1, 0 });
+    defer indices.release();
+    var v0 = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, true, true, true, true },
+        &[_]i32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 },
+    );
+    defer v0.release();
+    var v1 = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, false, true, true, true },
+        &[_]i32{ 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 },
+    );
+    defer v1.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(indices.retain()),
+        compute.Datum.fromArray(v0.retain()),
+        compute.Datum.fromArray(v1.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("choose", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .fixed_size_list);
+
+    const out_list = zcore.FixedSizeListArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 5), out_list.len());
+    try std.testing.expectEqual(@as(usize, 2), out_list.listSize());
+    try std.testing.expect(!out_list.isNull(0));
+    try std.testing.expect(out_list.isNull(1));
+    try std.testing.expect(out_list.isNull(2));
+    try std.testing.expect(!out_list.isNull(3));
+    try std.testing.expect(!out_list.isNull(4));
+
+    var row0 = try out_list.value(0);
+    defer row0.release();
+    const row0_i32 = zcore.Int32Array{ .data = row0.data() };
+    try std.testing.expectEqual(@as(i32, 1), row0_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 2), row0_i32.value(1));
+
+    var row3 = try out_list.value(3);
+    defer row3.release();
+    const row3_i32 = zcore.Int32Array{ .data = row3.data() };
+    try std.testing.expectEqual(@as(i32, 17), row3_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 18), row3_i32.value(1));
+
+    var row4 = try out_list.value(4);
+    defer row4.release();
+    const row4_i32 = zcore.Int32Array{ .data = row4.data() };
+    try std.testing.expectEqual(@as(i32, 9), row4_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 10), row4_i32.value(1));
 }
 
 test "choose supports struct values with null propagation" {
@@ -2468,6 +2645,97 @@ test "case_when supports list values with struct<bool...> conditions" {
     const row4_i32 = zcore.Int32Array{ .data = row4.data() };
     try std.testing.expectEqual(@as(usize, 1), row4_i32.len());
     try std.testing.expectEqual(@as(i32, 25), row4_i32.value(0));
+}
+
+test "case_when supports fixed_size_list values with struct<bool...> conditions" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var cond0 = try makeBoolArray(allocator, &[_]?bool{ true, false, false, null, false });
+    defer cond0.release();
+    var cond1 = try makeBoolArray(allocator, &[_]?bool{ false, true, false, true, false });
+    defer cond1.release();
+    var conds = try makeStructBool2Array(allocator, cond0, cond1);
+    defer conds.release();
+    var v0 = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, true, true, true, true },
+        &[_]i32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 },
+    );
+    defer v0.release();
+    var v1 = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, false, true, true, true },
+        &[_]i32{ 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 },
+    );
+    defer v1.release();
+    var v_else = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, true, true, true, false },
+        &[_]i32{ 21, 22, 23, 24, 25, 26, 27, 28, 29, 30 },
+    );
+    defer v_else.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(conds.retain()),
+        compute.Datum.fromArray(v0.retain()),
+        compute.Datum.fromArray(v1.retain()),
+        compute.Datum.fromArray(v_else.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+    defer {
+        var d = args[3];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("case_when", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .fixed_size_list);
+
+    const out_list = zcore.FixedSizeListArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 5), out_list.len());
+    try std.testing.expectEqual(@as(usize, 2), out_list.listSize());
+    try std.testing.expect(!out_list.isNull(0));
+    try std.testing.expect(out_list.isNull(1));
+    try std.testing.expect(!out_list.isNull(2));
+    try std.testing.expect(!out_list.isNull(3));
+    try std.testing.expect(out_list.isNull(4));
+
+    var row0 = try out_list.value(0);
+    defer row0.release();
+    const row0_i32 = zcore.Int32Array{ .data = row0.data() };
+    try std.testing.expectEqual(@as(i32, 1), row0_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 2), row0_i32.value(1));
+
+    var row2 = try out_list.value(2);
+    defer row2.release();
+    const row2_i32 = zcore.Int32Array{ .data = row2.data() };
+    try std.testing.expectEqual(@as(i32, 25), row2_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 26), row2_i32.value(1));
+
+    var row3 = try out_list.value(3);
+    defer row3.release();
+    const row3_i32 = zcore.Int32Array{ .data = row3.data() };
+    try std.testing.expectEqual(@as(i32, 17), row3_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 18), row3_i32.value(1));
 }
 
 test "case_when supports struct values with struct<bool...> conditions" {
