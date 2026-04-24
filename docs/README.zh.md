@@ -11,10 +11,10 @@
 - `is_null`（vector，将 null 位图映射为 `bool` 掩码，使用 `Options.none`）
 - `is_valid`（vector，`is_null` 的反向掩码，使用 `Options.none`）
 - `true_unless_null`（vector，非 null 输出 `true`，null 输出 `false`，使用 `Options.none`）
-- `if_else`（vector，支持 `null/bool/fixed-width/string/binary/struct` 子集，使用 `Options.none`）
-- `coalesce`（vector，可变参数，按行选择第一个非 null，使用 `Options.none`）
-- `choose`（vector，可变参数，按 0-based 索引选择值，使用 `Options.none`）
-- `case_when`（vector，Arrow 原生 `struct<bool...> + *cases` 且支持可选 else，使用 `Options.none`）
+- `if_else`（vector，支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集，使用 `Options.none`）
+- `coalesce`（vector，可变参数，按行选择第一个非 null，值类型支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集，使用 `Options.none`）
+- `choose`（vector，可变参数，按 0-based 索引选择值，值类型支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集，使用 `Options.none`）
+- `case_when`（vector，Arrow 原生 `struct<bool...> + *cases` 且支持可选 else，值类型支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集，使用 `Options.none`）
 - `subtract_i64`（vector）
 - `divide_i64`（vector）
 - `multiply_i64`（vector）

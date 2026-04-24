@@ -871,6 +871,50 @@ const SelectionConfig = struct {
     has_else: bool = false,
 };
 
+fn selectionValueArgCount(config: SelectionConfig, args_len: usize) usize {
+    return switch (config.kind) {
+        .coalesce => args_len,
+        .choose => args_len - 1,
+        .case_when => config.case_pair_count + (if (config.has_else) @as(usize, 1) else @as(usize, 0)),
+    };
+}
+
+fn fillSelectionValueArgIndices(
+    out: []usize,
+    config: SelectionConfig,
+    args_len: usize,
+) compute.KernelError!void {
+    switch (config.kind) {
+        .coalesce => {
+            if (out.len != args_len) return error.InvalidInput;
+            for (out, 0..) |*slot, i| slot.* = i;
+        },
+        .choose => {
+            if (out.len != args_len - 1) return error.InvalidInput;
+            for (out, 0..) |*slot, i| slot.* = i + 1;
+        },
+        .case_when => {
+            const expected = config.case_pair_count + (if (config.has_else) @as(usize, 1) else @as(usize, 0));
+            if (out.len != expected) return error.InvalidInput;
+            for (out, 0..) |*slot, i| {
+                if (i < config.case_pair_count) {
+                    slot.* = i * 2 + 1;
+                } else {
+                    if (!config.has_else or args_len == 0) return error.InvalidInput;
+                    slot.* = args_len - 1;
+                }
+            }
+        },
+    }
+}
+
+fn selectionValueSlotForArgIndex(value_arg_indices: []const usize, arg_index: usize) ?usize {
+    for (value_arg_indices, 0..) |value_arg_index, slot| {
+        if (value_arg_index == arg_index) return slot;
+    }
+    return null;
+}
+
 const CaseWhenStructArgs = struct {
     allocator: std.mem.Allocator,
     args: []compute.Datum,
@@ -1405,6 +1449,120 @@ fn selectListKernel(
     };
 }
 
+fn selectStructKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    config: SelectionConfig,
+    data_type: compute.DataType,
+) compute.KernelError!compute.Datum {
+    const struct_type = data_type.struct_;
+    const out_len = try compute.inferNaryExecLen(args);
+    const value_arg_count = selectionValueArgCount(config, args.len);
+    const value_arg_indices = ctx.tempAllocator().alloc(usize, value_arg_count) catch return error.OutOfMemory;
+    defer ctx.tempAllocator().free(value_arg_indices);
+    try fillSelectionValueArgIndices(value_arg_indices, config, args.len);
+
+    var validity = try zcore.OwnedBuffer.init(ctx.tempAllocator(), common.bitByteLength(out_len));
+    defer validity.deinit();
+    var null_count: usize = 0;
+    var produced: usize = 0;
+    var selection_indices_builder = try zcore.Int32Builder.init(ctx.tempAllocator(), out_len);
+    defer selection_indices_builder.deinit();
+
+    var iter = try compute.NaryExecChunkIterator.init(ctx.tempAllocator(), args);
+    defer iter.deinit();
+    while (try iter.next()) |chunk_value| {
+        var chunk = chunk_value;
+        defer chunk.deinit();
+        var i: usize = 0;
+        while (i < chunk.len) : (i += 1) {
+            const out_index = produced + i;
+            const selected_index = try resolveSelectedArgIndex(chunk.values, i, config);
+            if (selected_index == null) {
+                null_count += 1;
+                selection_indices_builder.appendNull() catch |err| return common.kernelAppendError(err);
+                continue;
+            }
+            const selected_arg_index = selected_index.?;
+            const selected = chunk.values[selected_arg_index];
+            if (selected.isNullAt(i)) {
+                null_count += 1;
+                selection_indices_builder.appendNull() catch |err| return common.kernelAppendError(err);
+                continue;
+            }
+
+            const slot = selectionValueSlotForArgIndex(value_arg_indices, selected_arg_index) orelse return error.InvalidInput;
+            const slot_i32 = std.math.cast(i32, slot) orelse return error.InvalidInput;
+            selection_indices_builder.append(slot_i32) catch |err| return common.kernelAppendError(err);
+            common.setBit(validity.data[0..], out_index);
+        }
+        produced += chunk.len;
+    }
+    var selection_indices = selection_indices_builder.finish() catch |err| return common.kernelAppendError(err);
+    defer selection_indices.release();
+
+    const children = ctx.tempAllocator().alloc(zcore.ArrayRef, struct_type.fields.len) catch return error.OutOfMemory;
+    var child_count: usize = 0;
+    errdefer {
+        while (child_count > 0) {
+            child_count -= 1;
+            var child = children[child_count];
+            child.release();
+        }
+        ctx.tempAllocator().free(children);
+    }
+
+    for (struct_type.fields, 0..) |field, field_index| {
+        const child_args = ctx.tempAllocator().alloc(compute.Datum, value_arg_count + 1) catch return error.OutOfMemory;
+        var child_arg_count: usize = 0;
+        defer ctx.tempAllocator().free(child_args);
+        defer {
+            while (child_arg_count > 0) {
+                child_arg_count -= 1;
+                child_args[child_arg_count].release();
+            }
+        }
+
+        child_args[0] = compute.Datum.fromArray(selection_indices.retain());
+        child_arg_count += 1;
+        for (value_arg_indices, 0..) |value_arg_index, slot| {
+            child_args[slot + 1] = try extractStructFieldDatum(
+                ctx.tempAllocator(),
+                args[value_arg_index],
+                field_index,
+                field.data_type.*,
+            );
+            child_arg_count += 1;
+        }
+
+        var child_out = try chooseKernel(ctx, child_args, compute.Options.noneValue());
+        defer child_out.release();
+        if (!child_out.isArray()) return error.InvalidInput;
+        children[field_index] = child_out.array.retain();
+        child_count += 1;
+    }
+
+    const validity_shared = if (null_count == 0)
+        zcore.SharedBuffer.empty
+    else
+        validity.toShared(common.bitByteLength(out_len)) catch |err| return common.kernelAppendError(err);
+    errdefer if (null_count != 0) {
+        var owned = validity_shared;
+        owned.release();
+    };
+
+    const buffers = ctx.tempAllocator().alloc(zcore.SharedBuffer, 1) catch return error.OutOfMemory;
+    buffers[0] = validity_shared;
+    const out = zcore.ArrayRef.fromOwnedUnsafe(ctx.tempAllocator(), .{
+        .data_type = data_type,
+        .length = out_len,
+        .null_count = null_count,
+        .buffers = buffers,
+        .children = children,
+    }) catch return error.OutOfMemory;
+    return compute.Datum.fromArray(out);
+}
+
 fn selectFixedWidthKernel(
     ctx: *compute.ExecContext,
     args: []const compute.Datum,
@@ -1496,6 +1654,7 @@ fn runSelectionKernel(
         .large_binary => selectBinaryKernel(ctx, args, config, .large_binary),
         .binary_view => selectBinaryKernel(ctx, args, config, .binary_view),
         .list, .large_list => selectListKernel(ctx, args, config, data_type),
+        .struct_ => selectStructKernel(ctx, args, config, data_type),
         else => blk: {
             if (!common.isFilterFixedWidthType(data_type)) break :blk error.UnsupportedType;
             break :blk selectFixedWidthKernel(ctx, args, config, data_type);

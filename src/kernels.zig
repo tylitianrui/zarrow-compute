@@ -2030,6 +2030,63 @@ test "coalesce supports list values with first-non-null semantics" {
     try std.testing.expect(out_list.isNull(4));
 }
 
+test "coalesce supports struct values with first-non-null semantics" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var lhs = try makeStructI64BoolArray(
+        allocator,
+        &[_]bool{ false, true, false, true },
+        &[_]?i64{ 1, 2, 3, 4 },
+        &[_]?bool{ true, false, true, false },
+    );
+    defer lhs.release();
+    var rhs = try makeStructI64BoolArray(
+        allocator,
+        &[_]bool{ true, true, false, false },
+        &[_]?i64{ 10, 20, 30, 40 },
+        &[_]?bool{ false, true, false, true },
+    );
+    defer rhs.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(lhs.retain()),
+        compute.Datum.fromArray(rhs.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("coalesce", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .struct_);
+
+    const out_struct = zcore.StructArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 4), out_struct.len());
+    try std.testing.expect(!out_struct.isNull(0));
+    try std.testing.expect(!out_struct.isNull(1));
+    try std.testing.expect(out_struct.isNull(2));
+    try std.testing.expect(!out_struct.isNull(3));
+
+    const out_i64 = zcore.Int64Array{ .data = out_struct.fieldRef(0).data() };
+    const out_bool = zcore.BooleanArray{ .data = out_struct.fieldRef(1).data() };
+    try std.testing.expectEqual(@as(i64, 10), out_i64.value(0));
+    try std.testing.expectEqual(false, out_bool.value(0));
+    try std.testing.expectEqual(@as(i64, 2), out_i64.value(1));
+    try std.testing.expectEqual(false, out_bool.value(1));
+    try std.testing.expectEqual(@as(i64, 4), out_i64.value(3));
+    try std.testing.expectEqual(false, out_bool.value(3));
+}
+
 test "choose supports variadic value selection with null propagation" {
     const allocator = std.testing.allocator;
     var registry = compute.FunctionRegistry.init(allocator);
@@ -2164,6 +2221,68 @@ test "choose supports large_list values with null propagation" {
     try std.testing.expectEqual(@as(usize, 2), row4_i32.len());
     try std.testing.expectEqual(@as(i32, 13), row4_i32.value(0));
     try std.testing.expectEqual(@as(i32, 14), row4_i32.value(1));
+}
+
+test "choose supports struct values with null propagation" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var indices = try makeInt32Array(allocator, &[_]?i32{ 0, 1, null, 1 });
+    defer indices.release();
+    var v0 = try makeStructI64BoolArray(
+        allocator,
+        &[_]bool{ true, true, true, true },
+        &[_]?i64{ 1, 2, 3, 4 },
+        &[_]?bool{ true, false, true, false },
+    );
+    defer v0.release();
+    var v1 = try makeStructI64BoolArray(
+        allocator,
+        &[_]bool{ true, false, true, true },
+        &[_]?i64{ 10, 20, 30, 40 },
+        &[_]?bool{ false, true, false, true },
+    );
+    defer v1.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(indices.retain()),
+        compute.Datum.fromArray(v0.retain()),
+        compute.Datum.fromArray(v1.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("choose", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .struct_);
+
+    const out_struct = zcore.StructArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 4), out_struct.len());
+    try std.testing.expect(!out_struct.isNull(0));
+    try std.testing.expect(out_struct.isNull(1));
+    try std.testing.expect(out_struct.isNull(2));
+    try std.testing.expect(!out_struct.isNull(3));
+
+    const out_i64 = zcore.Int64Array{ .data = out_struct.fieldRef(0).data() };
+    const out_bool = zcore.BooleanArray{ .data = out_struct.fieldRef(1).data() };
+    try std.testing.expectEqual(@as(i64, 1), out_i64.value(0));
+    try std.testing.expectEqual(true, out_bool.value(0));
+    try std.testing.expectEqual(@as(i64, 40), out_i64.value(3));
+    try std.testing.expectEqual(true, out_bool.value(3));
 }
 
 test "choose rejects out-of-bounds index" {
@@ -2349,6 +2468,87 @@ test "case_when supports list values with struct<bool...> conditions" {
     const row4_i32 = zcore.Int32Array{ .data = row4.data() };
     try std.testing.expectEqual(@as(usize, 1), row4_i32.len());
     try std.testing.expectEqual(@as(i32, 25), row4_i32.value(0));
+}
+
+test "case_when supports struct values with struct<bool...> conditions" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var cond0 = try makeBoolArray(allocator, &[_]?bool{ true, false, false, false, false });
+    defer cond0.release();
+    var cond1 = try makeBoolArray(allocator, &[_]?bool{ false, true, true, false, null });
+    defer cond1.release();
+    var conds = try makeStructBool2Array(allocator, cond0, cond1);
+    defer conds.release();
+    var v0 = try makeStructI64BoolArray(
+        allocator,
+        &[_]bool{ true, true, true, true, true },
+        &[_]?i64{ 1, 2, 3, 4, 5 },
+        &[_]?bool{ true, false, true, false, true },
+    );
+    defer v0.release();
+    var v1 = try makeStructI64BoolArray(
+        allocator,
+        &[_]bool{ true, false, true, true, true },
+        &[_]?i64{ 10, 20, 30, 40, 50 },
+        &[_]?bool{ false, true, false, true, false },
+    );
+    defer v1.release();
+    var v_else = try makeStructI64BoolArray(
+        allocator,
+        &[_]bool{ true, true, true, true, false },
+        &[_]?i64{ 100, 200, 300, 400, 500 },
+        &[_]?bool{ true, true, true, true, true },
+    );
+    defer v_else.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(conds.retain()),
+        compute.Datum.fromArray(v0.retain()),
+        compute.Datum.fromArray(v1.retain()),
+        compute.Datum.fromArray(v_else.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+    defer {
+        var d = args[3];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("case_when", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .struct_);
+
+    const out_struct = zcore.StructArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 5), out_struct.len());
+    try std.testing.expect(!out_struct.isNull(0));
+    try std.testing.expect(out_struct.isNull(1));
+    try std.testing.expect(!out_struct.isNull(2));
+    try std.testing.expect(!out_struct.isNull(3));
+    try std.testing.expect(out_struct.isNull(4));
+
+    const out_i64 = zcore.Int64Array{ .data = out_struct.fieldRef(0).data() };
+    const out_bool = zcore.BooleanArray{ .data = out_struct.fieldRef(1).data() };
+    try std.testing.expectEqual(@as(i64, 1), out_i64.value(0));
+    try std.testing.expectEqual(true, out_bool.value(0));
+    try std.testing.expectEqual(@as(i64, 30), out_i64.value(2));
+    try std.testing.expectEqual(false, out_bool.value(2));
+    try std.testing.expectEqual(@as(i64, 400), out_i64.value(3));
+    try std.testing.expectEqual(true, out_bool.value(3));
 }
 
 test "case_when struct<bool...> without else falls back to null" {

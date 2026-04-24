@@ -90,6 +90,12 @@ pub fn isSelectionSupportedType(data_type: compute.DataType) bool {
     return switch (data_type) {
         .list => |list_type| isSelectionSupportedType(list_type.value_field.data_type.*),
         .large_list => |list_type| isSelectionSupportedType(list_type.value_field.data_type.*),
+        .struct_ => |struct_type| blk: {
+            for (struct_type.fields) |field| {
+                if (!isSelectionSupportedType(field.data_type.*)) break :blk false;
+            }
+            break :blk true;
+        },
         else => isFilterSupportedType(data_type),
     };
 }
