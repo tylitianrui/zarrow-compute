@@ -600,7 +600,7 @@ fn ifElseStructKernel(
     return compute.Datum.fromArray(out);
 }
 
-const IfElseListKind = enum {
+const ListKind = enum {
     list,
     large_list,
 };
@@ -613,7 +613,7 @@ fn mapConcatArrayError(err: anyerror) compute.KernelError {
     };
 }
 
-fn listValuesRefFromArray(array_ref: zcore.ArrayRef, kind: IfElseListKind) compute.KernelError!zcore.ArrayRef {
+fn listValuesRefFromArray(array_ref: zcore.ArrayRef, kind: ListKind) compute.KernelError!zcore.ArrayRef {
     return switch (kind) {
         .list => blk: {
             if (array_ref.data().data_type != .list) return error.InvalidInput;
@@ -628,7 +628,7 @@ fn listValuesRefFromArray(array_ref: zcore.ArrayRef, kind: IfElseListKind) compu
     };
 }
 
-fn firstListValuesRefFromDatum(datum: compute.Datum, kind: IfElseListKind) compute.KernelError!zcore.ArrayRef {
+fn firstListValuesRefFromDatum(datum: compute.Datum, kind: ListKind) compute.KernelError!zcore.ArrayRef {
     return switch (datum) {
         .array => |array_ref| listValuesRefFromArray(array_ref, kind),
         .chunked => |chunks| blk: {
@@ -643,7 +643,7 @@ fn firstListValuesRefFromDatum(datum: compute.Datum, kind: IfElseListKind) compu
 fn extractListValueSlice(
     value: compute.ExecChunkValue,
     logical_index: usize,
-    kind: IfElseListKind,
+    kind: ListKind,
 ) compute.KernelError!zcore.ArrayRef {
     return switch (value) {
         .array => |array_ref| switch (kind) {
@@ -662,17 +662,29 @@ fn extractListValueSlice(
     };
 }
 
+fn firstMatchingListValuesRefFromArgs(
+    args: []const compute.Datum,
+    data_type: compute.DataType,
+    kind: ListKind,
+) compute.KernelError!zcore.ArrayRef {
+    for (args) |arg| {
+        if (!arg.dataType().eql(data_type)) continue;
+        if (arg == .scalar) continue;
+        return firstListValuesRefFromDatum(arg, kind);
+    }
+    return error.InvalidInput;
+}
+
 fn concatSelectedListValues(
     allocator: std.mem.Allocator,
     value_type: compute.DataType,
     selected_values: []const zcore.ArrayRef,
     args: []const compute.Datum,
-    kind: IfElseListKind,
+    data_type: compute.DataType,
+    kind: ListKind,
 ) compute.KernelError!zcore.ArrayRef {
     if (selected_values.len == 0) {
-        var source_values = firstListValuesRefFromDatum(args[1], kind) catch blk: {
-            break :blk try firstListValuesRefFromDatum(args[2], kind);
-        };
+        var source_values = try firstMatchingListValuesRefFromArgs(args, data_type, kind);
         defer source_values.release();
         return source_values.slice(0, 0) catch |err| return mapSelectionInputError(err);
     }
@@ -753,6 +765,7 @@ fn ifElseListKernel(
                 list_type.value_field.data_type.*,
                 selected_values[0..selected_count],
                 args,
+                data_type,
                 .list,
             );
             defer merged_values.release();
@@ -805,6 +818,7 @@ fn ifElseListKernel(
                 list_type.value_field.data_type.*,
                 selected_values[0..selected_count],
                 args,
+                data_type,
                 .large_list,
             );
             defer merged_values.release();
@@ -1280,6 +1294,117 @@ fn selectBinaryKernel(
     }
 }
 
+fn selectListKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    config: SelectionConfig,
+    data_type: compute.DataType,
+) compute.KernelError!compute.Datum {
+    const out_len = try compute.inferNaryExecLen(args);
+    const selected_values = ctx.tempAllocator().alloc(zcore.ArrayRef, out_len) catch return error.OutOfMemory;
+    var selected_count: usize = 0;
+    defer {
+        while (selected_count > 0) {
+            selected_count -= 1;
+            var value = selected_values[selected_count];
+            value.release();
+        }
+        ctx.tempAllocator().free(selected_values);
+    }
+
+    return switch (data_type) {
+        .list => |list_type| blk: {
+            var builder = try zcore.ListBuilder.init(ctx.tempAllocator(), out_len, list_type.value_field);
+            defer builder.deinit();
+
+            var iter = try compute.NaryExecChunkIterator.init(ctx.tempAllocator(), args);
+            defer iter.deinit();
+            while (try iter.next()) |chunk_value| {
+                var chunk = chunk_value;
+                defer chunk.deinit();
+                var i: usize = 0;
+                while (i < chunk.len) : (i += 1) {
+                    const selected_index = try resolveSelectedArgIndex(chunk.values, i, config);
+                    if (selected_index == null) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+
+                    const selected = chunk.values[selected_index.?];
+                    if (selected.isNullAt(i)) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+
+                    const value = try extractListValueSlice(selected, i, .list);
+                    const value_len = value.data().length;
+                    builder.appendLen(value_len) catch |err| return common.kernelAppendError(err);
+                    selected_values[selected_count] = value;
+                    selected_count += 1;
+                }
+            }
+
+            var merged_values = try concatSelectedListValues(
+                ctx.tempAllocator(),
+                list_type.value_field.data_type.*,
+                selected_values[0..selected_count],
+                args,
+                data_type,
+                .list,
+            );
+            defer merged_values.release();
+
+            const out = builder.finish(merged_values) catch |err| return common.kernelAppendError(err);
+            break :blk compute.Datum.fromArray(out);
+        },
+        .large_list => |list_type| blk: {
+            var builder = try zcore.LargeListBuilder.init(ctx.tempAllocator(), out_len, list_type.value_field);
+            defer builder.deinit();
+
+            var iter = try compute.NaryExecChunkIterator.init(ctx.tempAllocator(), args);
+            defer iter.deinit();
+            while (try iter.next()) |chunk_value| {
+                var chunk = chunk_value;
+                defer chunk.deinit();
+                var i: usize = 0;
+                while (i < chunk.len) : (i += 1) {
+                    const selected_index = try resolveSelectedArgIndex(chunk.values, i, config);
+                    if (selected_index == null) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+
+                    const selected = chunk.values[selected_index.?];
+                    if (selected.isNullAt(i)) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+
+                    const value = try extractListValueSlice(selected, i, .large_list);
+                    const value_len = value.data().length;
+                    builder.appendLen(value_len) catch |err| return common.kernelAppendError(err);
+                    selected_values[selected_count] = value;
+                    selected_count += 1;
+                }
+            }
+
+            var merged_values = try concatSelectedListValues(
+                ctx.tempAllocator(),
+                list_type.value_field.data_type.*,
+                selected_values[0..selected_count],
+                args,
+                data_type,
+                .large_list,
+            );
+            defer merged_values.release();
+
+            const out = builder.finish(merged_values) catch |err| return common.kernelAppendError(err);
+            break :blk compute.Datum.fromArray(out);
+        },
+        else => error.UnsupportedType,
+    };
+}
+
 fn selectFixedWidthKernel(
     ctx: *compute.ExecContext,
     args: []const compute.Datum,
@@ -1370,6 +1495,7 @@ fn runSelectionKernel(
         .binary => selectBinaryKernel(ctx, args, config, .binary),
         .large_binary => selectBinaryKernel(ctx, args, config, .large_binary),
         .binary_view => selectBinaryKernel(ctx, args, config, .binary_view),
+        .list, .large_list => selectListKernel(ctx, args, config, data_type),
         else => blk: {
             if (!common.isFilterFixedWidthType(data_type)) break :blk error.UnsupportedType;
             break :blk selectFixedWidthKernel(ctx, args, config, data_type);

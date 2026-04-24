@@ -86,6 +86,14 @@ pub fn isFilterSupportedType(data_type: compute.DataType) bool {
     };
 }
 
+pub fn isSelectionSupportedType(data_type: compute.DataType) bool {
+    return switch (data_type) {
+        .list => |list_type| isSelectionSupportedType(list_type.value_field.data_type.*),
+        .large_list => |list_type| isSelectionSupportedType(list_type.value_field.data_type.*),
+        else => isFilterSupportedType(data_type),
+    };
+}
+
 pub fn isIfElseSupportedType(data_type: compute.DataType) bool {
     return switch (data_type) {
         .list => |list_type| isIfElseSupportedType(list_type.value_field.data_type.*),
@@ -131,7 +139,7 @@ pub fn isChooseIndexType(data_type: compute.DataType) bool {
 pub fn variadicCoalesceSupported(args: []const compute.Datum) bool {
     if (args.len < 1) return false;
     const value_type = args[0].dataType();
-    if (!isFilterSupportedType(value_type)) return false;
+    if (!isSelectionSupportedType(value_type)) return false;
     for (args[1..]) |arg| {
         if (!arg.dataType().eql(value_type)) return false;
     }
@@ -142,7 +150,7 @@ pub fn variadicChooseSupported(args: []const compute.Datum) bool {
     if (args.len < 2) return false;
     if (!isChooseIndexType(args[0].dataType())) return false;
     const value_type = args[1].dataType();
-    if (!isFilterSupportedType(value_type)) return false;
+    if (!isSelectionSupportedType(value_type)) return false;
     for (args[2..]) |arg| {
         if (!arg.dataType().eql(value_type)) return false;
     }
@@ -167,7 +175,7 @@ fn caseWhenStructSupported(args: []const compute.Datum) bool {
     if (!(value_count == cond_count or value_count == cond_count + 1)) return false;
 
     const first_value_type = args[1].dataType();
-    if (!isFilterSupportedType(first_value_type)) return false;
+    if (!isSelectionSupportedType(first_value_type)) return false;
     for (args[2..]) |arg| {
         if (!arg.dataType().eql(first_value_type)) return false;
     }

@@ -28,6 +28,12 @@ zig build test
 zig build examples
 ```
 
+To sync `zarrow` to latest `master` before local builds:
+
+```bash
+./tools/update_zarrow_master_hash.sh
+```
+
 Example output (`zig build examples`):
 
 ```text

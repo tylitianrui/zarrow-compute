@@ -34,6 +34,14 @@ jobs:
       - name: Zig Version
         run: zig version
 
+      - name: Refresh zarrow master hash
+        run: |
+          set -euo pipefail
+          ZARROW_HASH="$(zig fetch --global-cache-dir "${{ runner.temp }}/zig-global-cache" https://github.com/tylitianrui/zarrow/archive/refs/heads/master.tar.gz)"
+          perl -0pi -e 's#(\.url = "https://github.com/tylitianrui/zarrow/archive/refs/heads/master\.tar\.gz",\s*\n\s*\.hash = ")[^"]+(")#$1'"${ZARROW_HASH}"'$2#' build.zig.zon
+          echo "ZARROW_HASH=${ZARROW_HASH}" >> "$GITHUB_ENV"
+          echo "Using zarrow hash: ${ZARROW_HASH}"
+
       - name: Lint (zig fmt check)
         run: zig fmt --check build.zig src examples
 
@@ -41,8 +49,7 @@ jobs:
         if: matrix.zig-version == '0.15.0' || matrix.zig-version == '0.15.1'
         run: |
           set -euo pipefail
-          HASH="$(zig fetch --global-cache-dir "${{ runner.temp }}/zig-global-cache" https://github.com/tylitianrui/zarrow/archive/refs/tags/v0.0.2.tar.gz)"
-          perl -0pi -e 's/std\.fs\.openDirAbsolute\(examples_dir\.getPath\(b\), \.\{ \.iterate = true \}\)/std.fs.cwd().openDir(examples_dir.getPath(b), .{ .iterate = true })/g' "${{ runner.temp }}/zig-global-cache/p/${HASH}/build.zig"
+          perl -0pi -e 's/std\.fs\.openDirAbsolute\(examples_dir\.getPath\(b\), \.\{ \.iterate = true \}\)/std.fs.cwd().openDir(examples_dir.getPath(b), .{ .iterate = true })/g' "${{ runner.temp }}/zig-global-cache/p/${ZARROW_HASH}/build.zig"
 
       - name: Run Tests
         run: zig build --cache-dir "${{ github.workspace }}/.zig-cache" --global-cache-dir "${{ runner.temp }}/zig-global-cache" test
