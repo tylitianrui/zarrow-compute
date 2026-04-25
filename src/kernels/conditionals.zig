@@ -562,9 +562,9 @@ fn ifElseStructKernel(
     for (struct_type.fields, 0..) |field, field_index| {
         var child_cond = args[0].retain();
         defer child_cond.release();
-        var child_lhs = try extractStructFieldDatum(ctx.tempAllocator(), args[1], field_index, field.data_type.*);
+        var child_lhs = try extractStructFieldDatum(args[1], field_index, field.data_type.*);
         defer child_lhs.release();
-        var child_rhs = try extractStructFieldDatum(ctx.tempAllocator(), args[2], field_index, field.data_type.*);
+        var child_rhs = try extractStructFieldDatum(args[2], field_index, field.data_type.*);
         defer child_rhs.release();
 
         const child_args = [_]compute.Datum{
@@ -634,21 +634,15 @@ fn listValuesRefFromArray(array_ref: zcore.ArrayRef, kind: ListKind) compute.Ker
     };
 }
 
-fn firstListValuesRefFromDatum(datum: compute.Datum, kind: ListKind) compute.KernelError!zcore.ArrayRef {
-    return switch (datum) {
-        .array => |array_ref| listValuesRefFromArray(array_ref, kind),
-        .chunked => |chunks| blk: {
-            if (chunks.numChunks() == 0) return error.InvalidInput;
-            const chunk = chunks.chunk(0).*;
-            break :blk listValuesRefFromArray(chunk, kind);
-        },
-        .scalar => |scalar| blk: {
-            var payload = scalar.payloadArray() catch return error.InvalidInput;
-            defer payload.release();
-            if (payload.data().length != 1) return error.InvalidInput;
-            if (!payload.data().data_type.eql(scalar.data_type)) return error.InvalidInput;
-            break :blk listValuesRefFromArray(payload, kind);
-        },
+fn datumListValueSlice(
+    datum: compute.Datum,
+    logical_index: usize,
+    kind: ListKind,
+) compute.KernelError!zcore.ArrayRef {
+    return switch (kind) {
+        .list => compute.datumListValueAt(datum, logical_index),
+        .large_list => compute.datumLargeListValueAt(datum, logical_index),
+        .fixed_size_list => compute.datumFixedSizeListValueAt(datum, logical_index),
     };
 }
 
@@ -661,20 +655,12 @@ fn extractListValueSlice(
         .array => |array_ref| blk: {
             var datum = compute.Datum.fromArray(array_ref.retain());
             defer datum.release();
-            break :blk switch (kind) {
-                .list => compute.datumListValueAt(datum, logical_index),
-                .large_list => compute.datumLargeListValueAt(datum, logical_index),
-                .fixed_size_list => compute.datumFixedSizeListValueAt(datum, logical_index),
-            };
+            break :blk datumListValueSlice(datum, logical_index, kind);
         },
         .scalar => |scalar| blk: {
             var datum = compute.Datum.fromScalar(scalar.retain());
             defer datum.release();
-            break :blk switch (kind) {
-                .list => compute.datumListValueAt(datum, logical_index),
-                .large_list => compute.datumLargeListValueAt(datum, logical_index),
-                .fixed_size_list => compute.datumFixedSizeListValueAt(datum, logical_index),
-            };
+            break :blk datumListValueSlice(datum, logical_index, kind);
         },
     };
 }
@@ -684,21 +670,18 @@ fn extractListFillerSlice(
     logical_index: usize,
     kind: ListKind,
 ) compute.KernelError!zcore.ArrayRef {
-    return switch (value) {
-        .array => extractListValueSlice(value, logical_index, kind),
-        .scalar => |scalar| blk: {
-            var payload = scalar.payloadArray() catch return error.InvalidInput;
-            defer payload.release();
-            if (payload.data().length != 1) return error.InvalidInput;
-            if (!payload.data().data_type.eql(scalar.data_type)) return error.InvalidInput;
-            var datum = compute.Datum.fromArray(payload.retain());
-            defer datum.release();
-            break :blk switch (kind) {
-                .list => compute.datumListValueAt(datum, 0),
-                .large_list => compute.datumLargeListValueAt(datum, 0),
-                .fixed_size_list => compute.datumFixedSizeListValueAt(datum, 0),
-            };
+    return extractListValueSlice(value, logical_index, kind) catch |err| switch (err) {
+        error.InvalidInput => switch (value) {
+            .array => err,
+            .scalar => |scalar| blk: {
+                var payload = scalar.payloadArray() catch return err;
+                defer payload.release();
+                var payload_datum = compute.Datum.fromArray(payload.retain());
+                defer payload_datum.release();
+                break :blk datumListValueSlice(payload_datum, 0, kind);
+            },
         },
+        else => err,
     };
 }
 
@@ -739,7 +722,32 @@ fn firstMatchingListValuesRefFromArgs(
 ) compute.KernelError!zcore.ArrayRef {
     for (args) |arg| {
         if (!arg.dataType().eql(data_type)) continue;
-        return firstListValuesRefFromDatum(arg, kind);
+        var source = arg.retain();
+        defer source.release();
+
+        var first_value = datumListValueSlice(source, 0, kind) catch |err| switch (err) {
+            error.InvalidInput => blk: {
+                break :blk switch (source) {
+                    .array => |array_ref| blk2: {
+                        if (array_ref.data().length != 0) return err;
+                        break :blk2 try listValuesRefFromArray(array_ref, kind);
+                    },
+                    .chunked => |chunks| blk2: {
+                        if (chunks.len() != 0 or chunks.numChunks() == 0) return err;
+                        const chunk = chunks.chunk(0).*;
+                        break :blk2 try listValuesRefFromArray(chunk, kind);
+                    },
+                    .scalar => |scalar| blk2: {
+                        var payload = scalar.payloadArray() catch return err;
+                        defer payload.release();
+                        break :blk2 try listValuesRefFromArray(payload, kind);
+                    },
+                };
+            },
+            else => return err,
+        };
+        defer first_value.release();
+        return first_value.slice(0, 0) catch |err| return mapSelectionInputError(err);
     }
     return error.InvalidInput;
 }
@@ -753,9 +761,7 @@ fn concatSelectedListValues(
     kind: ListKind,
 ) compute.KernelError!zcore.ArrayRef {
     if (selected_values.len == 0) {
-        var source_values = try firstMatchingListValuesRefFromArgs(args, data_type, kind);
-        defer source_values.release();
-        return source_values.slice(0, 0) catch |err| return mapSelectionInputError(err);
+        return try firstMatchingListValuesRefFromArgs(args, data_type, kind);
     }
 
     return compute.concatArrayRefs(allocator, value_type, selected_values) catch |err| return mapConcatArrayError(err);
@@ -1102,12 +1108,10 @@ fn parseCaseWhenStructConfig(args: []const compute.Datum) compute.KernelError!Se
 }
 
 fn extractStructFieldDatum(
-    allocator: std.mem.Allocator,
     struct_conditions: compute.Datum,
     field_index: usize,
     field_type: compute.DataType,
 ) compute.KernelError!compute.Datum {
-    _ = allocator;
     var source = struct_conditions.retain();
     defer source.release();
     var field = try compute.datumStructField(source, field_index);
@@ -1141,7 +1145,6 @@ fn buildCaseWhenStructArgs(
     while (pair_index < config.case_pair_count) : (pair_index += 1) {
         const cond_arg_index = pair_index * 2;
         pair_args[cond_arg_index] = try extractStructFieldDatum(
-            allocator,
             args[0],
             pair_index,
             cond_struct.fields[pair_index].data_type.*,
@@ -1712,7 +1715,6 @@ fn selectStructKernel(
         child_arg_count += 1;
         for (value_arg_indices, 0..) |value_arg_index, slot| {
             child_args[slot + 1] = try extractStructFieldDatum(
-                ctx.tempAllocator(),
                 args[value_arg_index],
                 field_index,
                 field.data_type.*,
