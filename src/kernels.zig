@@ -1121,16 +1121,20 @@ test "filter supports binary_view value arrays with predicate null emission" {
     try std.testing.expect(view.isNull(2));
 }
 
-test "filter rejects unsupported nested value type at dispatch" {
+test "filter supports list values with predicate null emission" {
     const allocator = std.testing.allocator;
     var registry = compute.FunctionRegistry.init(allocator);
     defer registry.deinit();
     try registerBaseKernels(&registry);
     var ctx = compute.ExecContext.init(allocator, &registry);
 
-    var values = try makeListInt32Array(allocator);
+    var values = try makeListInt32ArrayWithLens(
+        allocator,
+        &[_]?usize{ 2, null, 1, 2 },
+        &[_]i32{ 1, 2, 3, 4, 5 },
+    );
     defer values.release();
-    var predicate = try makeBoolArray(allocator, &[_]?bool{ true, true });
+    var predicate = try makeBoolArray(allocator, &[_]?bool{ true, null, false, true });
     defer predicate.release();
 
     const args = [_]compute.Datum{
@@ -1146,10 +1150,191 @@ test "filter rejects unsupported nested value type at dispatch" {
         d.release();
     }
 
-    try std.testing.expectError(
-        error.NoMatchingKernel,
-        ctx.invokeVector("filter", args[0..], .{ .filter = .{} }),
+    var out = try ctx.invokeVector("filter", args[0..], .{
+        .filter = .{ .drop_nulls = false },
+    });
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .list);
+
+    const out_list = zcore.ListArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), out_list.len());
+
+    var row0 = try out_list.value(0);
+    defer row0.release();
+    const row0_i32 = zcore.Int32Array{ .data = row0.data() };
+    try std.testing.expectEqual(@as(usize, 2), row0_i32.len());
+    try std.testing.expectEqual(@as(i32, 1), row0_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 2), row0_i32.value(1));
+
+    try std.testing.expect(out_list.isNull(1));
+
+    var row2 = try out_list.value(2);
+    defer row2.release();
+    const row2_i32 = zcore.Int32Array{ .data = row2.data() };
+    try std.testing.expectEqual(@as(usize, 2), row2_i32.len());
+    try std.testing.expectEqual(@as(i32, 4), row2_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 5), row2_i32.value(1));
+}
+
+test "filter supports large_list values with predicate-driven selection" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeLargeListInt32ArrayWithLens(
+        allocator,
+        &[_]?usize{ 1, 2, null, 1 },
+        &[_]i32{ 10, 11, 12, 13 },
     );
+    defer values.release();
+    var predicate = try makeBoolArray(allocator, &[_]?bool{ false, true, null, true });
+    defer predicate.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromArray(predicate.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("filter", args[0..], .{ .filter = .{} });
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .large_list);
+
+    const out_list = zcore.LargeListArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 2), out_list.len());
+
+    var row0 = try out_list.value(0);
+    defer row0.release();
+    const row0_i32 = zcore.Int32Array{ .data = row0.data() };
+    try std.testing.expectEqual(@as(usize, 2), row0_i32.len());
+    try std.testing.expectEqual(@as(i32, 11), row0_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 12), row0_i32.value(1));
+
+    var row1 = try out_list.value(1);
+    defer row1.release();
+    const row1_i32 = zcore.Int32Array{ .data = row1.data() };
+    try std.testing.expectEqual(@as(usize, 1), row1_i32.len());
+    try std.testing.expectEqual(@as(i32, 13), row1_i32.value(0));
+}
+
+test "filter supports fixed_size_list values with predicate null emission" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, true, true, true },
+        &[_]i32{ 1, 2, 3, 4, 5, 6, 7, 8 },
+    );
+    defer values.release();
+    var predicate = try makeBoolArray(allocator, &[_]?bool{ true, null, true, false });
+    defer predicate.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromArray(predicate.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("filter", args[0..], .{
+        .filter = .{ .drop_nulls = false },
+    });
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .fixed_size_list);
+
+    const out_list = zcore.FixedSizeListArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), out_list.len());
+    try std.testing.expectEqual(@as(usize, 2), out_list.listSize());
+    try std.testing.expect(!out_list.isNull(0));
+    try std.testing.expect(out_list.isNull(1));
+    try std.testing.expect(!out_list.isNull(2));
+
+    var row0 = try out_list.value(0);
+    defer row0.release();
+    const row0_i32 = zcore.Int32Array{ .data = row0.data() };
+    try std.testing.expectEqual(@as(i32, 1), row0_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 2), row0_i32.value(1));
+
+    var row2 = try out_list.value(2);
+    defer row2.release();
+    const row2_i32 = zcore.Int32Array{ .data = row2.data() };
+    try std.testing.expectEqual(@as(i32, 5), row2_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 6), row2_i32.value(1));
+}
+
+test "filter supports struct values with predicate null emission" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeStructI64BoolArray(
+        allocator,
+        &[_]bool{ true, false, true, true },
+        &[_]?i64{ 1, 2, 3, 4 },
+        &[_]?bool{ true, false, null, true },
+    );
+    defer values.release();
+    var predicate = try makeBoolArray(allocator, &[_]?bool{ true, null, true, false });
+    defer predicate.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromArray(predicate.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("filter", args[0..], .{
+        .filter = .{ .drop_nulls = false },
+    });
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .struct_);
+
+    const out_struct = zcore.StructArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), out_struct.len());
+    try std.testing.expect(!out_struct.isNull(0));
+    try std.testing.expect(out_struct.isNull(1));
+    try std.testing.expect(!out_struct.isNull(2));
+
+    const out_i64 = zcore.Int64Array{ .data = out_struct.fieldRef(0).data() };
+    try std.testing.expectEqual(@as(i64, 1), out_i64.value(0));
+    try std.testing.expectEqual(@as(i64, 3), out_i64.value(2));
+
+    const out_bool = zcore.BooleanArray{ .data = out_struct.fieldRef(1).data() };
+    try std.testing.expect(out_bool.value(0));
+    try std.testing.expect(out_bool.isNull(2));
 }
 
 test "drop_null removes nulls from int64 arrays and keeps type" {
@@ -1215,14 +1400,18 @@ test "drop_null supports chunked input and preserves order" {
     try std.testing.expectEqual(@as(i64, 3), view.value(2));
 }
 
-test "drop_null rejects unsupported nested value type at dispatch" {
+test "drop_null supports list values" {
     const allocator = std.testing.allocator;
     var registry = compute.FunctionRegistry.init(allocator);
     defer registry.deinit();
     try registerBaseKernels(&registry);
     var ctx = compute.ExecContext.init(allocator, &registry);
 
-    var values = try makeListInt32Array(allocator);
+    var values = try makeListInt32ArrayWithLens(
+        allocator,
+        &[_]?usize{ 2, null, 1, null, 1 },
+        &[_]i32{ 1, 2, 3, 4 },
+    );
     defer values.release();
     const args = [_]compute.Datum{
         compute.Datum.fromArray(values.retain()),
@@ -1232,10 +1421,169 @@ test "drop_null rejects unsupported nested value type at dispatch" {
         d.release();
     }
 
-    try std.testing.expectError(
-        error.NoMatchingKernel,
-        ctx.invokeVector("drop_null", args[0..], compute.Options.noneValue()),
+    var out = try ctx.invokeVector("drop_null", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .list);
+
+    const out_list = zcore.ListArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), out_list.len());
+
+    var row0 = try out_list.value(0);
+    defer row0.release();
+    const row0_i32 = zcore.Int32Array{ .data = row0.data() };
+    try std.testing.expectEqual(@as(i32, 1), row0_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 2), row0_i32.value(1));
+
+    var row1 = try out_list.value(1);
+    defer row1.release();
+    const row1_i32 = zcore.Int32Array{ .data = row1.data() };
+    try std.testing.expectEqual(@as(i32, 3), row1_i32.value(0));
+
+    var row2 = try out_list.value(2);
+    defer row2.release();
+    const row2_i32 = zcore.Int32Array{ .data = row2.data() };
+    try std.testing.expectEqual(@as(i32, 4), row2_i32.value(0));
+}
+
+test "drop_null supports large_list values" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeLargeListInt32ArrayWithLens(
+        allocator,
+        &[_]?usize{ null, 1, 2, null, 1 },
+        &[_]i32{ 7, 8, 9, 10 },
     );
+    defer values.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("drop_null", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .large_list);
+
+    const out_list = zcore.LargeListArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), out_list.len());
+
+    var row0 = try out_list.value(0);
+    defer row0.release();
+    const row0_i32 = zcore.Int32Array{ .data = row0.data() };
+    try std.testing.expectEqual(@as(i32, 7), row0_i32.value(0));
+
+    var row1 = try out_list.value(1);
+    defer row1.release();
+    const row1_i32 = zcore.Int32Array{ .data = row1.data() };
+    try std.testing.expectEqual(@as(i32, 8), row1_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 9), row1_i32.value(1));
+
+    var row2 = try out_list.value(2);
+    defer row2.release();
+    const row2_i32 = zcore.Int32Array{ .data = row2.data() };
+    try std.testing.expectEqual(@as(i32, 10), row2_i32.value(0));
+}
+
+test "drop_null supports fixed_size_list values" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, false, true, false, true },
+        &[_]i32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 },
+    );
+    defer values.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("drop_null", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .fixed_size_list);
+
+    const out_list = zcore.FixedSizeListArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 3), out_list.len());
+    try std.testing.expectEqual(@as(usize, 2), out_list.listSize());
+    try std.testing.expect(!out_list.isNull(0));
+    try std.testing.expect(!out_list.isNull(1));
+    try std.testing.expect(!out_list.isNull(2));
+
+    var row0 = try out_list.value(0);
+    defer row0.release();
+    const row0_i32 = zcore.Int32Array{ .data = row0.data() };
+    try std.testing.expectEqual(@as(i32, 1), row0_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 2), row0_i32.value(1));
+
+    var row1 = try out_list.value(1);
+    defer row1.release();
+    const row1_i32 = zcore.Int32Array{ .data = row1.data() };
+    try std.testing.expectEqual(@as(i32, 5), row1_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 6), row1_i32.value(1));
+
+    var row2 = try out_list.value(2);
+    defer row2.release();
+    const row2_i32 = zcore.Int32Array{ .data = row2.data() };
+    try std.testing.expectEqual(@as(i32, 9), row2_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 10), row2_i32.value(1));
+}
+
+test "drop_null supports struct values" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeStructI64BoolArray(
+        allocator,
+        &[_]bool{ true, false, true, false },
+        &[_]?i64{ 10, 20, 30, 40 },
+        &[_]?bool{ true, false, null, true },
+    );
+    defer values.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("drop_null", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .struct_);
+
+    const out_struct = zcore.StructArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 2), out_struct.len());
+    try std.testing.expect(!out_struct.isNull(0));
+    try std.testing.expect(!out_struct.isNull(1));
+
+    const out_i64 = zcore.Int64Array{ .data = out_struct.fieldRef(0).data() };
+    try std.testing.expectEqual(@as(i64, 10), out_i64.value(0));
+    try std.testing.expectEqual(@as(i64, 30), out_i64.value(1));
+
+    const out_bool = zcore.BooleanArray{ .data = out_struct.fieldRef(1).data() };
+    try std.testing.expect(out_bool.value(0));
+    try std.testing.expect(out_bool.isNull(1));
 }
 
 test "is_null marks null positions for chunked input" {

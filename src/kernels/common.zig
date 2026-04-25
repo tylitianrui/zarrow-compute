@@ -81,6 +81,15 @@ pub fn isFilterFixedWidthType(data_type: compute.DataType) bool {
 
 pub fn isFilterSupportedType(data_type: compute.DataType) bool {
     return switch (data_type) {
+        .list => |list_type| isFilterSupportedType(list_type.value_field.data_type.*),
+        .large_list => |list_type| isFilterSupportedType(list_type.value_field.data_type.*),
+        .fixed_size_list => |list_type| isFilterSupportedType(list_type.value_field.data_type.*),
+        .struct_ => |struct_type| blk: {
+            for (struct_type.fields) |field| {
+                if (!isFilterSupportedType(field.data_type.*)) break :blk false;
+            }
+            break :blk true;
+        },
         .null, .bool, .string, .large_string, .string_view, .binary, .large_binary, .binary_view => true,
         else => isFilterFixedWidthType(data_type),
     };
