@@ -642,7 +642,13 @@ fn firstListValuesRefFromDatum(datum: compute.Datum, kind: ListKind) compute.Ker
             const chunk = chunks.chunk(0).*;
             break :blk listValuesRefFromArray(chunk, kind);
         },
-        .scalar => error.InvalidInput,
+        .scalar => |scalar| blk: {
+            var payload = scalar.payloadArray() catch return error.InvalidInput;
+            defer payload.release();
+            if (payload.data().length != 1) return error.InvalidInput;
+            if (!payload.data().data_type.eql(scalar.data_type)) return error.InvalidInput;
+            break :blk listValuesRefFromArray(payload, kind);
+        },
     };
 }
 
@@ -652,25 +658,78 @@ fn extractListValueSlice(
     kind: ListKind,
 ) compute.KernelError!zcore.ArrayRef {
     return switch (value) {
-        .array => |array_ref| switch (kind) {
-            .list => blk: {
-                if (array_ref.data().data_type != .list) return error.InvalidInput;
-                const list_array = zcore.ListArray{ .data = array_ref.data() };
-                break :blk list_array.value(logical_index) catch |err| return mapSelectionInputError(err);
-            },
-            .large_list => blk: {
-                if (array_ref.data().data_type != .large_list) return error.InvalidInput;
-                const list_array = zcore.LargeListArray{ .data = array_ref.data() };
-                break :blk list_array.value(logical_index) catch |err| return mapSelectionInputError(err);
-            },
-            .fixed_size_list => blk: {
-                if (array_ref.data().data_type != .fixed_size_list) return error.InvalidInput;
-                const list_array = zcore.FixedSizeListArray{ .data = array_ref.data() };
-                break :blk list_array.value(logical_index) catch |err| return mapSelectionInputError(err);
-            },
+        .array => |array_ref| blk: {
+            var datum = compute.Datum.fromArray(array_ref.retain());
+            defer datum.release();
+            break :blk switch (kind) {
+                .list => compute.datumListValueAt(datum, logical_index),
+                .large_list => compute.datumLargeListValueAt(datum, logical_index),
+                .fixed_size_list => compute.datumFixedSizeListValueAt(datum, logical_index),
+            };
         },
-        .scalar => error.InvalidInput,
+        .scalar => |scalar| blk: {
+            var datum = compute.Datum.fromScalar(scalar.retain());
+            defer datum.release();
+            break :blk switch (kind) {
+                .list => compute.datumListValueAt(datum, logical_index),
+                .large_list => compute.datumLargeListValueAt(datum, logical_index),
+                .fixed_size_list => compute.datumFixedSizeListValueAt(datum, logical_index),
+            };
+        },
     };
+}
+
+fn extractListFillerSlice(
+    value: compute.ExecChunkValue,
+    logical_index: usize,
+    kind: ListKind,
+) compute.KernelError!zcore.ArrayRef {
+    return switch (value) {
+        .array => extractListValueSlice(value, logical_index, kind),
+        .scalar => |scalar| blk: {
+            var payload = scalar.payloadArray() catch return error.InvalidInput;
+            defer payload.release();
+            if (payload.data().length != 1) return error.InvalidInput;
+            if (!payload.data().data_type.eql(scalar.data_type)) return error.InvalidInput;
+            var datum = compute.Datum.fromArray(payload.retain());
+            defer datum.release();
+            break :blk switch (kind) {
+                .list => compute.datumListValueAt(datum, 0),
+                .large_list => compute.datumLargeListValueAt(datum, 0),
+                .fixed_size_list => compute.datumFixedSizeListValueAt(datum, 0),
+            };
+        },
+    };
+}
+
+fn extractFirstListFillerSlice(
+    values: []const compute.ExecChunkValue,
+    logical_index: usize,
+    kind: ListKind,
+) compute.KernelError!zcore.ArrayRef {
+    for (values) |value| {
+        return extractListFillerSlice(value, logical_index, kind) catch |err| switch (err) {
+            error.InvalidInput => continue,
+            else => return err,
+        };
+    }
+    return error.InvalidInput;
+}
+
+fn extractFirstListFillerSliceFromIndices(
+    values: []const compute.ExecChunkValue,
+    arg_indices: []const usize,
+    logical_index: usize,
+    kind: ListKind,
+) compute.KernelError!zcore.ArrayRef {
+    for (arg_indices) |arg_index| {
+        const value = values[arg_index];
+        return extractListFillerSlice(value, logical_index, kind) catch |err| switch (err) {
+            error.InvalidInput => continue,
+            else => return err,
+        };
+    }
+    return error.InvalidInput;
 }
 
 fn firstMatchingListValuesRefFromArgs(
@@ -680,7 +739,6 @@ fn firstMatchingListValuesRefFromArgs(
 ) compute.KernelError!zcore.ArrayRef {
     for (args) |arg| {
         if (!arg.dataType().eql(data_type)) continue;
-        if (arg == .scalar) continue;
         return firstListValuesRefFromDatum(arg, kind);
     }
     return error.InvalidInput;
@@ -857,7 +915,15 @@ fn ifElseListKernel(
                     const vi = values_index + j;
                     if (cond_chunk.values.isNullAt(ci)) {
                         builder.appendNull() catch |err| return common.kernelAppendError(err);
-                        const filler = try extractListValueSlice(values_chunk.lhs, vi, .fixed_size_list);
+                        const fallback_values = [_]compute.ExecChunkValue{
+                            values_chunk.lhs,
+                            values_chunk.rhs,
+                        };
+                        const filler = try extractFirstListFillerSlice(
+                            fallback_values[0..],
+                            vi,
+                            .fixed_size_list,
+                        );
                         selected_values[selected_count] = filler;
                         selected_count += 1;
                         continue;
@@ -867,7 +933,15 @@ fn ifElseListKernel(
                     const selected = if (take_lhs) values_chunk.lhs else values_chunk.rhs;
                     if (selected.isNullAt(vi)) {
                         builder.appendNull() catch |err| return common.kernelAppendError(err);
-                        const filler = try extractListValueSlice(selected, vi, .fixed_size_list);
+                        const fallback_values = [_]compute.ExecChunkValue{
+                            values_chunk.lhs,
+                            values_chunk.rhs,
+                        };
+                        const filler = try extractFirstListFillerSlice(
+                            fallback_values[0..],
+                            vi,
+                            .fixed_size_list,
+                        );
                         selected_values[selected_count] = filler;
                         selected_count += 1;
                         continue;
@@ -1033,43 +1107,15 @@ fn extractStructFieldDatum(
     field_index: usize,
     field_type: compute.DataType,
 ) compute.KernelError!compute.Datum {
-    return switch (struct_conditions) {
-        .array => |struct_array_ref| blk: {
-            const struct_array = zcore.StructArray{ .data = struct_array_ref.data() };
-            if (field_index >= struct_array.fieldCount()) return error.InvalidInput;
-            const child = struct_array.field(field_index) catch |err| return mapSelectionInputError(err);
-            break :blk compute.Datum.fromArray(child);
-        },
-        .chunked => |struct_chunks| blk: {
-            const chunk_count = struct_chunks.numChunks();
-            const child_chunks = allocator.alloc(zcore.ArrayRef, chunk_count) catch return error.OutOfMemory;
-            var initialized: usize = 0;
-            errdefer {
-                while (initialized > 0) {
-                    initialized -= 1;
-                    child_chunks[initialized].release();
-                }
-                allocator.free(child_chunks);
-            }
-
-            var chunk_index: usize = 0;
-            while (chunk_index < chunk_count) : (chunk_index += 1) {
-                const struct_chunk = struct_chunks.chunk(chunk_index).*;
-                const struct_array = zcore.StructArray{ .data = struct_chunk.data() };
-                if (field_index >= struct_array.fieldCount()) return error.InvalidInput;
-                child_chunks[chunk_index] = struct_array.field(field_index) catch |err| return mapSelectionInputError(err);
-                initialized += 1;
-            }
-
-            const child_chunked = zcore.ChunkedArray.init(allocator, field_type, child_chunks) catch |err| return mapSelectionInputError(err);
-            for (child_chunks) |*child_chunk| {
-                child_chunk.release();
-            }
-            allocator.free(child_chunks);
-            break :blk compute.Datum.fromChunked(child_chunked);
-        },
-        .scalar => error.InvalidInput,
-    };
+    _ = allocator;
+    var source = struct_conditions.retain();
+    defer source.release();
+    var field = try compute.datumStructField(source, field_index);
+    if (!field.dataType().eql(field_type)) {
+        field.release();
+        return error.InvalidInput;
+    }
+    return field;
 }
 
 fn buildCaseWhenStructArgs(
@@ -1539,7 +1585,12 @@ fn selectListKernel(
                     const selected_index = try resolveSelectedArgIndex(chunk.values, i, config);
                     if (selected_index == null) {
                         builder.appendNull() catch |err| return common.kernelAppendError(err);
-                        const fallback = try extractListValueSlice(chunk.values[value_arg_indices[0]], i, .fixed_size_list);
+                        const fallback = try extractFirstListFillerSliceFromIndices(
+                            chunk.values,
+                            value_arg_indices,
+                            i,
+                            .fixed_size_list,
+                        );
                         selected_values[selected_count] = fallback;
                         selected_count += 1;
                         continue;
@@ -1548,7 +1599,12 @@ fn selectListKernel(
                     const selected = chunk.values[selected_index.?];
                     if (selected.isNullAt(i)) {
                         builder.appendNull() catch |err| return common.kernelAppendError(err);
-                        const filler = try extractListValueSlice(selected, i, .fixed_size_list);
+                        const filler = try extractFirstListFillerSliceFromIndices(
+                            chunk.values,
+                            value_arg_indices,
+                            i,
+                            .fixed_size_list,
+                        );
                         selected_values[selected_count] = filler;
                         selected_count += 1;
                         continue;

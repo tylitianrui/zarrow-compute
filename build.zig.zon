@@ -6,7 +6,7 @@
     .dependencies = .{
         .zarrow = .{
             .url = "https://github.com/tylitianrui/zarrow/archive/refs/heads/master.tar.gz",
-            .hash = "zarrow-0.0.2-I8BLE1sMTwBwVBP-r04v04-_cmx-Ixeky7x6BDp2l40t",
+            .hash = "zarrow-0.0.2-I8BLE00ATABWZVk40x_g8pnDCfTB7WpCVec-aaqdMNZf",
         },
     },
     .paths = .{

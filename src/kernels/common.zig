@@ -167,7 +167,7 @@ pub fn variadicChooseSupported(args: []const compute.Datum) bool {
 
 fn caseWhenStructSupported(args: []const compute.Datum) bool {
     if (args.len < 2) return false;
-    if (!(args[0].isArray() or args[0].isChunked())) return false;
+    if (!(args[0].isArray() or args[0].isChunked() or args[0].isScalar())) return false;
 
     const cond_struct = switch (args[0].dataType()) {
         .struct_ => |value| value,
