@@ -347,6 +347,22 @@ fn makeNestedScalarDatum(payload: zcore.ArrayRef) !compute.Datum {
     return compute.Datum.fromScalar(try compute.Scalar.initNested(payload.data().data_type, payload));
 }
 
+fn expectFixedSizeListAllNullAligned(out: compute.Datum, expected_len: usize, expected_list_size: usize) !void {
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .fixed_size_list);
+    try out.array.data().validateLayout();
+
+    const out_list = zcore.FixedSizeListArray{ .data = out.array.data() };
+    try std.testing.expectEqual(expected_len, out_list.len());
+    try std.testing.expectEqual(expected_list_size, out_list.listSize());
+    var row: usize = 0;
+    while (row < expected_len) : (row += 1) {
+        try std.testing.expect(out_list.isNull(row));
+    }
+    const expected_values_len = std.math.mul(usize, expected_len, expected_list_size) catch return error.Overflow;
+    try std.testing.expectEqual(expected_values_len, out_list.valuesRef().data().length);
+}
+
 test "register base kernels exposes expected registry surface and resolvable signatures" {
     const allocator = std.testing.allocator;
     var registry = compute.FunctionRegistry.init(allocator);
@@ -1283,6 +1299,43 @@ test "filter supports fixed_size_list values with predicate null emission" {
     const row2_i32 = zcore.Int32Array{ .data = row2.data() };
     try std.testing.expectEqual(@as(i32, 5), row2_i32.value(0));
     try std.testing.expectEqual(@as(i32, 6), row2_i32.value(1));
+}
+
+test "filter fixed_size_list all-null predicate keeps aligned null rows" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, true, true },
+        &[_]i32{ 1, 2, 3, 4, 5, 6 },
+    );
+    defer values.release();
+    var predicate = try makeBoolArray(allocator, &[_]?bool{ null, null, null });
+    defer predicate.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromArray(predicate.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("filter", args[0..], .{
+        .filter = .{ .drop_nulls = false },
+    });
+    defer out.release();
+    try expectFixedSizeListAllNullAligned(out, 3, 2);
 }
 
 test "filter supports struct values with predicate null emission" {
@@ -2351,6 +2404,53 @@ test "if_else supports fixed_size_list null scalar broadcast" {
     try std.testing.expectEqual(@as(i32, 18), row3_i32.value(1));
 }
 
+test "if_else fixed_size_list all-null condition emits aligned null rows" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var cond = try makeBoolArray(allocator, &[_]?bool{ null, null, null, null });
+    defer cond.release();
+    var lhs = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, true, true, true },
+        &[_]i32{ 1, 2, 3, 4, 5, 6, 7, 8 },
+    );
+    defer lhs.release();
+    var rhs = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, true, true, true },
+        &[_]i32{ 11, 12, 13, 14, 15, 16, 17, 18 },
+    );
+    defer rhs.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(cond.retain()),
+        compute.Datum.fromArray(lhs.retain()),
+        compute.Datum.fromArray(rhs.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("if_else", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try expectFixedSizeListAllNullAligned(out, 4, 2);
+}
+
 test "if_else rejects non-none options" {
     const allocator = std.testing.allocator;
     var registry = compute.FunctionRegistry.init(allocator);
@@ -2725,6 +2825,46 @@ test "coalesce supports fixed_size_list null scalar broadcast" {
     const row2_i32 = zcore.Int32Array{ .data = row2.data() };
     try std.testing.expectEqual(@as(i32, 5), row2_i32.value(0));
     try std.testing.expectEqual(@as(i32, 6), row2_i32.value(1));
+}
+
+test "coalesce fixed_size_list all-null candidates emit aligned null rows" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var lhs = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ false, false, false },
+        &[_]i32{ 1, 2, 3, 4, 5, 6 },
+    );
+    defer lhs.release();
+    var rhs = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ false, false, false },
+        &[_]i32{ 11, 12, 13, 14, 15, 16 },
+    );
+    defer rhs.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(lhs.retain()),
+        compute.Datum.fromArray(rhs.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("coalesce", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try expectFixedSizeListAllNullAligned(out, 3, 2);
 }
 
 test "coalesce supports struct values with first-non-null semantics" {
@@ -3119,6 +3259,52 @@ test "choose supports fixed_size_list null scalar broadcast" {
     const row1_i32 = zcore.Int32Array{ .data = row1.data() };
     try std.testing.expectEqual(@as(i32, 13), row1_i32.value(0));
     try std.testing.expectEqual(@as(i32, 14), row1_i32.value(1));
+}
+
+test "choose fixed_size_list all-null indices emit aligned null rows" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var indices = try makeInt32Array(allocator, &[_]?i32{ null, null, null });
+    defer indices.release();
+    var v0 = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, true, true },
+        &[_]i32{ 1, 2, 3, 4, 5, 6 },
+    );
+    defer v0.release();
+    var v1 = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, true, true },
+        &[_]i32{ 11, 12, 13, 14, 15, 16 },
+    );
+    defer v1.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(indices.retain()),
+        compute.Datum.fromArray(v0.retain()),
+        compute.Datum.fromArray(v1.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("choose", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try expectFixedSizeListAllNullAligned(out, 3, 2);
 }
 
 test "choose supports struct values with null propagation" {
@@ -3563,6 +3749,57 @@ test "case_when supports fixed_size_list null scalar broadcast" {
     const row1_i32 = zcore.Int32Array{ .data = row1.data() };
     try std.testing.expectEqual(@as(i32, 23), row1_i32.value(0));
     try std.testing.expectEqual(@as(i32, 24), row1_i32.value(1));
+}
+
+test "case_when fixed_size_list without else and no matches emits aligned null rows" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var cond0 = try makeBoolArray(allocator, &[_]?bool{ false, false, false });
+    defer cond0.release();
+    var cond1 = try makeBoolArray(allocator, &[_]?bool{ false, false, false });
+    defer cond1.release();
+    var conds = try makeStructBool2Array(allocator, cond0, cond1);
+    defer conds.release();
+    var v0 = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, true, true },
+        &[_]i32{ 1, 2, 3, 4, 5, 6 },
+    );
+    defer v0.release();
+    var v1 = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, true, true },
+        &[_]i32{ 11, 12, 13, 14, 15, 16 },
+    );
+    defer v1.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(conds.retain()),
+        compute.Datum.fromArray(v0.retain()),
+        compute.Datum.fromArray(v1.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+    defer {
+        var d = args[2];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("case_when", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try expectFixedSizeListAllNullAligned(out, 3, 2);
 }
 
 test "case_when supports struct values with struct<bool...> conditions" {
