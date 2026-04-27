@@ -1001,9 +1001,6 @@ pub fn ifElseKernel(
     if (!args[0].dataType().eql(.{ .bool = {} })) return error.InvalidInput;
     const data_type = args[1].dataType();
     if (!data_type.eql(args[2].dataType())) return error.InvalidInput;
-    if (data_type == .fixed_size_list) {
-        return ifElseListKernel(ctx, args, data_type);
-    }
     const out_len = try inferTernaryExecLen(args[0], args[1], args[2]);
     const selection_indices = ctx.tempAllocator().alloc(?usize, out_len) catch return error.OutOfMemory;
     defer ctx.tempAllocator().free(selection_indices);
@@ -1858,10 +1855,7 @@ fn runSelectionKernel(
     config: SelectionConfig,
     data_type: compute.DataType,
 ) compute.KernelError!compute.Datum {
-    if (data_type == .fixed_size_list) {
-        return selectListKernel(ctx, args, config, data_type);
-    }
-
+    _ = data_type;
     const out_len = try compute.inferNaryExecLen(args);
     const value_arg_count = selectionValueArgCount(config, args.len);
     const value_arg_indices = ctx.tempAllocator().alloc(usize, value_arg_count) catch return error.OutOfMemory;

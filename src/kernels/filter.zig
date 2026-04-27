@@ -715,15 +715,12 @@ pub fn filterKernel(
     args: []const compute.Datum,
     options: compute.Options,
 ) compute.KernelError!compute.Datum {
+    _ = ctx;
     if (args.len != 2) return error.InvalidArity;
     const filter_opts = switch (options) {
         .filter => |o| o,
         else => return error.InvalidOptions,
     };
-    const data_type = args[0].dataType();
-    if (data_type == .fixed_size_list) {
-        return filterListKernel(ctx, args, filter_opts, data_type);
-    }
     return compute.datumFilter(args[0], args[1], filter_opts) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         error.UnsupportedType => error.UnsupportedType,
