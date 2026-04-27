@@ -175,6 +175,17 @@ fn printFixedSizeListInt32DatumLine(label: []const u8, datum: compute.Datum) !vo
     std.debug.print("]\n", .{});
 }
 
+fn printScalarDatumLine(label: []const u8, datum: compute.Datum) !void {
+    if (!datum.isScalar()) return error.InvalidInput;
+    std.debug.print("{s} => ", .{label});
+    switch (datum.scalar.value) {
+        .null => std.debug.print("null\n", .{}),
+        .i64 => |v| std.debug.print("{d}\n", .{v}),
+        .f64 => |v| std.debug.print("{d}\n", .{v}),
+        else => return error.InvalidInput,
+    }
+}
+
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
     var registry = compute.FunctionRegistry.init(allocator);
@@ -355,6 +366,169 @@ pub fn main() !void {
     var case_when_out = try ctx.invokeVector("case_when", case_when_args[0..], compute.Options.noneValue());
     defer case_when_out.release();
     try printInt64DatumLine("case_when", case_when_out);
+
+    var take_indices = try makeInt32Array(allocator, &[_]?i32{ 2, 1, null, 0 });
+    defer take_indices.release();
+    const take_args = [_]compute.Datum{
+        compute.Datum.fromArray(left.retain()),
+        compute.Datum.fromArray(take_indices.retain()),
+    };
+    defer {
+        var d = take_args[0];
+        d.release();
+    }
+    defer {
+        var d = take_args[1];
+        d.release();
+    }
+    var take_out = try ctx.invokeVector("take", take_args[0..], compute.Options.noneValue());
+    defer take_out.release();
+    try printInt64DatumLine("take", take_out);
+
+    var array_take_out = try ctx.invokeVector("array_take", take_args[0..], compute.Options.noneValue());
+    defer array_take_out.release();
+    try printInt64DatumLine("array_take", array_take_out);
+
+    var nonzero_values = try makeInt64Array(allocator, &[_]?i64{ 0, null, -1, 0, 5 });
+    defer nonzero_values.release();
+    const nonzero_args = [_]compute.Datum{compute.Datum.fromArray(nonzero_values.retain())};
+    defer {
+        var d = nonzero_args[0];
+        d.release();
+    }
+    var nonzero_out = try ctx.invokeVector("indices_nonzero", nonzero_args[0..], compute.Options.noneValue());
+    defer nonzero_out.release();
+    try printInt64DatumLine("indices_nonzero", nonzero_out);
+
+    const fill_null_args = [_]compute.Datum{
+        compute.Datum.fromArray(left.retain()),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int64 = {} },
+            .value = .{ .i64 = 9 },
+        }),
+    };
+    defer {
+        var d = fill_null_args[0];
+        d.release();
+    }
+    defer {
+        var d = fill_null_args[1];
+        d.release();
+    }
+    var fill_null_out = try ctx.invokeVector("fill_null", fill_null_args[0..], compute.Options.noneValue());
+    defer fill_null_out.release();
+    try printInt64DatumLine("fill_null", fill_null_out);
+
+    var fill_series = try makeInt64Array(allocator, &[_]?i64{ null, 2, null, 4, null });
+    defer fill_series.release();
+    const fill_series_args = [_]compute.Datum{
+        compute.Datum.fromArray(fill_series.retain()),
+    };
+    defer {
+        var d = fill_series_args[0];
+        d.release();
+    }
+    var fill_forward_out = try ctx.invokeVector("fill_null_forward", fill_series_args[0..], compute.Options.noneValue());
+    defer fill_forward_out.release();
+    try printInt64DatumLine("fill_null_forward", fill_forward_out);
+
+    var fill_backward_out = try ctx.invokeVector("fill_null_backward", fill_series_args[0..], compute.Options.noneValue());
+    defer fill_backward_out.release();
+    try printInt64DatumLine("fill_null_backward", fill_backward_out);
+
+    const equal_args = [_]compute.Datum{
+        compute.Datum.fromArray(left.retain()),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int64 = {} },
+            .value = .{ .i64 = 1 },
+        }),
+    };
+    defer {
+        var d = equal_args[0];
+        d.release();
+    }
+    defer {
+        var d = equal_args[1];
+        d.release();
+    }
+    var equal_out = try ctx.invokeVector("equal", equal_args[0..], compute.Options.noneValue());
+    defer equal_out.release();
+    try printBoolDatumLine("equal", equal_out);
+
+    var kleene_lhs = try makeBoolArray(allocator, &[_]?bool{ false, null, true });
+    defer kleene_lhs.release();
+    var kleene_rhs = try makeBoolArray(allocator, &[_]?bool{ null, true, null });
+    defer kleene_rhs.release();
+    const kleene_args = [_]compute.Datum{
+        compute.Datum.fromArray(kleene_lhs.retain()),
+        compute.Datum.fromArray(kleene_rhs.retain()),
+    };
+    defer {
+        var d = kleene_args[0];
+        d.release();
+    }
+    defer {
+        var d = kleene_args[1];
+        d.release();
+    }
+    var and_kleene_out = try ctx.invokeVector("and_kleene", kleene_args[0..], compute.Options.noneValue());
+    defer and_kleene_out.release();
+    try printBoolDatumLine("and_kleene", and_kleene_out);
+
+    var or_kleene_out = try ctx.invokeVector("or_kleene", kleene_args[0..], compute.Options.noneValue());
+    defer or_kleene_out.release();
+    try printBoolDatumLine("or_kleene", or_kleene_out);
+
+    var cast_source = try makeInt32Array(allocator, &[_]?i32{ 1, 0, 2 });
+    defer cast_source.release();
+    const cast_args = [_]compute.Datum{compute.Datum.fromArray(cast_source.retain())};
+    defer {
+        var d = cast_args[0];
+        d.release();
+    }
+    var cast_i64_out = try ctx.invokeVector("cast", cast_args[0..], .{
+        .cast = .{
+            .safe = true,
+            .to_type = .{ .int64 = {} },
+        },
+    });
+    defer cast_i64_out.release();
+    try printInt64DatumLine("cast_i32_to_i64", cast_i64_out);
+
+    var cast_bool_out = try ctx.invokeVector("cast", cast_args[0..], .{
+        .cast = .{
+            .safe = false,
+            .to_type = .{ .bool = {} },
+        },
+    });
+    defer cast_bool_out.release();
+    try printBoolDatumLine("cast_i32_to_bool", cast_bool_out);
+
+    const agg_args = [_]compute.Datum{compute.Datum.fromArray(left.retain())};
+    defer {
+        var d = agg_args[0];
+        d.release();
+    }
+
+    var count_out = try ctx.invokeAggregate("count", agg_args[0..], compute.Options.noneValue());
+    defer count_out.release();
+    try printScalarDatumLine("count", count_out);
+
+    var sum_out = try ctx.invokeAggregate("sum", agg_args[0..], compute.Options.noneValue());
+    defer sum_out.release();
+    try printScalarDatumLine("sum", sum_out);
+
+    var min_out = try ctx.invokeAggregate("min", agg_args[0..], compute.Options.noneValue());
+    defer min_out.release();
+    try printScalarDatumLine("min", min_out);
+
+    var max_out = try ctx.invokeAggregate("max", agg_args[0..], compute.Options.noneValue());
+    defer max_out.release();
+    try printScalarDatumLine("max", max_out);
+
+    var mean_out = try ctx.invokeAggregate("mean", agg_args[0..], compute.Options.noneValue());
+    defer mean_out.release();
+    try printScalarDatumLine("mean", mean_out);
 
     var fs_a = try makeFixedSizeListInt32Array(
         allocator,

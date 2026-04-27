@@ -4528,3 +4528,186 @@ test "aggregate count/sum/min/max/mean support int64" {
     try std.testing.expect(mean_out.isScalar());
     try std.testing.expectEqual(@as(f64, 2.0), mean_out.scalar.value.f64);
 }
+
+test "indices_nonzero supports bool and int64 inputs" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var bool_values = try makeBoolArray(allocator, &[_]?bool{ false, null, true, true });
+    defer bool_values.release();
+    const bool_args = [_]compute.Datum{compute.Datum.fromArray(bool_values.retain())};
+    defer {
+        var d = bool_args[0];
+        d.release();
+    }
+
+    var bool_out = try ctx.invokeVector("indices_nonzero", bool_args[0..], compute.Options.noneValue());
+    defer bool_out.release();
+    try expectInt64ArrayValues(bool_out, &[_]?i64{ 2, 3 });
+
+    var int_values = try makeInt64Array(allocator, &[_]?i64{ 0, null, -1, 0, 5 });
+    defer int_values.release();
+    const int_args = [_]compute.Datum{compute.Datum.fromArray(int_values.retain())};
+    defer {
+        var d = int_args[0];
+        d.release();
+    }
+
+    var int_out = try ctx.invokeVector("indices_nonzero", int_args[0..], compute.Options.noneValue());
+    defer int_out.release();
+    try expectInt64ArrayValues(int_out, &[_]?i64{ 2, 4 });
+}
+
+test "take supports fixed_size_list values" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, false, true },
+        &[_]i32{ 1, 2, 3, 4, 5, 6 },
+    );
+    defer values.release();
+    var indices = try makeInt32Array(allocator, &[_]?i32{ 2, 1, null, 0 });
+    defer indices.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromArray(indices.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("take", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .fixed_size_list);
+
+    const out_list = zcore.FixedSizeListArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 4), out_list.len());
+    try std.testing.expect(!out_list.isNull(0));
+    try std.testing.expect(out_list.isNull(1));
+    try std.testing.expect(out_list.isNull(2));
+    try std.testing.expect(!out_list.isNull(3));
+
+    var row0 = try out_list.value(0);
+    defer row0.release();
+    const row0_i32 = zcore.Int32Array{ .data = row0.data() };
+    try std.testing.expectEqual(@as(i32, 5), row0_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 6), row0_i32.value(1));
+
+    var row3 = try out_list.value(3);
+    defer row3.release();
+    const row3_i32 = zcore.Int32Array{ .data = row3.data() };
+    try std.testing.expectEqual(@as(i32, 1), row3_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 2), row3_i32.value(1));
+}
+
+test "fill_null supports fixed_size_list values" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var lhs = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, false, true, false },
+        &[_]i32{ 1, 2, 3, 4, 5, 6, 7, 8 },
+    );
+    defer lhs.release();
+    var rhs = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, true, true, true },
+        &[_]i32{ 11, 12, 13, 14, 15, 16, 17, 18 },
+    );
+    defer rhs.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(lhs.retain()),
+        compute.Datum.fromArray(rhs.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out = try ctx.invokeVector("fill_null", args[0..], compute.Options.noneValue());
+    defer out.release();
+    try std.testing.expect(out.isArray());
+    try std.testing.expect(out.dataType() == .fixed_size_list);
+
+    const out_list = zcore.FixedSizeListArray{ .data = out.array.data() };
+    try std.testing.expectEqual(@as(usize, 4), out_list.len());
+    try std.testing.expect(!out_list.isNull(0));
+    try std.testing.expect(!out_list.isNull(1));
+    try std.testing.expect(!out_list.isNull(2));
+    try std.testing.expect(!out_list.isNull(3));
+
+    var row1 = try out_list.value(1);
+    defer row1.release();
+    const row1_i32 = zcore.Int32Array{ .data = row1.data() };
+    try std.testing.expectEqual(@as(i32, 13), row1_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 14), row1_i32.value(1));
+
+    var row3 = try out_list.value(3);
+    defer row3.release();
+    const row3_i32 = zcore.Int32Array{ .data = row3.data() };
+    try std.testing.expectEqual(@as(i32, 17), row3_i32.value(0));
+    try std.testing.expectEqual(@as(i32, 18), row3_i32.value(1));
+}
+
+test "aggregate sum/min/max/mean return null for all-null int64 input" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeInt64Array(allocator, &[_]?i64{ null, null, null });
+    defer values.release();
+    const args = [_]compute.Datum{compute.Datum.fromArray(values.retain())};
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    var sum_out = try ctx.invokeAggregate("sum", args[0..], compute.Options.noneValue());
+    defer sum_out.release();
+    try std.testing.expect(sum_out.isScalar());
+    try std.testing.expect(sum_out.scalar.value == .null);
+
+    var min_out = try ctx.invokeAggregate("min", args[0..], compute.Options.noneValue());
+    defer min_out.release();
+    try std.testing.expect(min_out.isScalar());
+    try std.testing.expect(min_out.scalar.value == .null);
+
+    var max_out = try ctx.invokeAggregate("max", args[0..], compute.Options.noneValue());
+    defer max_out.release();
+    try std.testing.expect(max_out.isScalar());
+    try std.testing.expect(max_out.scalar.value == .null);
+
+    var mean_out = try ctx.invokeAggregate("mean", args[0..], compute.Options.noneValue());
+    defer mean_out.release();
+    try std.testing.expect(mean_out.isScalar());
+    try std.testing.expect(mean_out.scalar.value == .null);
+}
