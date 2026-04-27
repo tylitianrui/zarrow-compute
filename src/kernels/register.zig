@@ -3,6 +3,9 @@ const arithmetic = @import("arithmetic.zig");
 const filter = @import("filter.zig");
 const nulls = @import("nulls.zig");
 const conditionals = @import("conditionals.zig");
+const selection = @import("selection.zig");
+const compare = @import("compare.zig");
+const logical = @import("logical.zig");
 const cast = @import("cast.zig");
 const aggregate = @import("aggregate.zig");
 
@@ -47,6 +50,36 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
             .result_type_fn = common.resultSameAsFirst,
         },
         .exec = filter.dropNullKernel,
+    });
+
+    try registry.registerVectorKernel("take", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = common.binaryTakeSupported,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultSameAsFirst,
+        },
+        .exec = selection.takeKernel,
+    });
+
+    try registry.registerVectorKernel("array_take", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = common.binaryTakeSupported,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultSameAsFirst,
+        },
+        .exec = selection.arrayTakeKernel,
+    });
+
+    try registry.registerVectorKernel("indices_nonzero", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unaryIndicesNonZeroSupported,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultI64,
+        },
+        .exec = selection.indicesNonZeroKernel,
     });
 
     try registry.registerVectorKernel("is_null", .{
@@ -122,6 +155,146 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
         .exec = conditionals.caseWhenKernel,
     });
 
+    try registry.registerVectorKernel("fill_null", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = common.binaryFillNullSupported,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultSameAsFirst,
+        },
+        .exec = selection.fillNullKernel,
+    });
+
+    try registry.registerVectorKernel("fill_null_forward", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unarySupportedFilter,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultSameAsFirst,
+        },
+        .exec = selection.fillNullForwardKernel,
+    });
+
+    try registry.registerVectorKernel("fill_null_backward", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unarySupportedFilter,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultSameAsFirst,
+        },
+        .exec = selection.fillNullBackwardKernel,
+    });
+
+    try registry.registerVectorKernel("equal", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = common.binaryInt64,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultBool,
+        },
+        .exec = compare.equalKernel,
+    });
+
+    try registry.registerVectorKernel("not_equal", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = common.binaryInt64,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultBool,
+        },
+        .exec = compare.notEqualKernel,
+    });
+
+    try registry.registerVectorKernel("less", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = common.binaryInt64,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultBool,
+        },
+        .exec = compare.lessKernel,
+    });
+
+    try registry.registerVectorKernel("less_equal", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = common.binaryInt64,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultBool,
+        },
+        .exec = compare.lessEqualKernel,
+    });
+
+    try registry.registerVectorKernel("greater", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = common.binaryInt64,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultBool,
+        },
+        .exec = compare.greaterKernel,
+    });
+
+    try registry.registerVectorKernel("greater_equal", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = common.binaryInt64,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultBool,
+        },
+        .exec = compare.greaterEqualKernel,
+    });
+
+    try registry.registerVectorKernel("invert", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unaryBool,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultBool,
+        },
+        .exec = logical.invertKernel,
+    });
+
+    try registry.registerVectorKernel("and_", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = common.binaryBool,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultBool,
+        },
+        .exec = logical.andKernel,
+    });
+
+    try registry.registerVectorKernel("or_", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = common.binaryBool,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultBool,
+        },
+        .exec = logical.orKernel,
+    });
+
+    try registry.registerVectorKernel("and_kleene", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = common.binaryBool,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultBool,
+        },
+        .exec = logical.andKleeneKernel,
+    });
+
+    try registry.registerVectorKernel("or_kleene", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = common.binaryBool,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultBool,
+        },
+        .exec = logical.orKleeneKernel,
+    });
+
     try registry.registerVectorKernel("subtract_i64", .{
         .signature = .{
             .arity = 2,
@@ -162,6 +335,16 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
         .exec = cast.castI64ToI32Kernel,
     });
 
+    try registry.registerVectorKernel("cast", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unaryArrayLike,
+            .options_check = common.onlyCastOptions,
+            .result_type_fn = cast.castResultType,
+        },
+        .exec = cast.castKernel,
+    });
+
     try registry.registerAggregateKernel("count_rows", .{
         .signature = .{
             .arity = 1,
@@ -177,6 +360,56 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
             .finalize = aggregate.countRowsFinalize,
             .deinit = aggregate.countRowsDeinit,
         },
+    });
+
+    try registry.registerAggregateKernel("count", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unaryArrayLike,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = aggregate.countResultType,
+        },
+        .exec = aggregate.countKernel,
+    });
+
+    try registry.registerAggregateKernel("sum", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unaryInt64ArrayLike,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultI64,
+        },
+        .exec = aggregate.sumKernel,
+    });
+
+    try registry.registerAggregateKernel("min", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unaryInt64ArrayLike,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultI64,
+        },
+        .exec = aggregate.minKernel,
+    });
+
+    try registry.registerAggregateKernel("max", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unaryInt64ArrayLike,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultI64,
+        },
+        .exec = aggregate.maxKernel,
+    });
+
+    try registry.registerAggregateKernel("mean", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unaryInt64ArrayLike,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = aggregate.meanResultType,
+        },
+        .exec = aggregate.meanKernel,
     });
 }
 

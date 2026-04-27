@@ -35,6 +35,16 @@ pub fn unaryInt64(args: []const compute.Datum) bool {
     return args.len == 1 and args[0].dataType().eql(.{ .int64 = {} });
 }
 
+pub fn unaryBool(args: []const compute.Datum) bool {
+    return args.len == 1 and args[0].dataType().eql(.{ .bool = {} });
+}
+
+pub fn binaryBool(args: []const compute.Datum) bool {
+    return args.len == 2 and
+        args[0].dataType().eql(.{ .bool = {} }) and
+        args[1].dataType().eql(.{ .bool = {} });
+}
+
 pub fn binaryInt64(args: []const compute.Datum) bool {
     return args.len == 2 and
         args[0].dataType().eql(.{ .int64 = {} }) and
@@ -139,6 +149,19 @@ pub fn unarySupportedFilter(args: []const compute.Datum) bool {
     return args.len == 1 and isFilterSupportedType(args[0].dataType()) and (args[0].isArray() or args[0].isChunked());
 }
 
+pub fn unaryInt64ArrayLike(args: []const compute.Datum) bool {
+    return args.len == 1 and args[0].dataType().eql(.{ .int64 = {} }) and (args[0].isArray() or args[0].isChunked());
+}
+
+pub fn unaryIndicesNonZeroSupported(args: []const compute.Datum) bool {
+    if (args.len != 1) return false;
+    if (!(args[0].isArray() or args[0].isChunked())) return false;
+    return switch (args[0].dataType()) {
+        .bool, .int32, .int64 => true,
+        else => false,
+    };
+}
+
 pub fn ternaryBoolIfElseSupported(args: []const compute.Datum) bool {
     return args.len == 3 and
         args[0].dataType().eql(.{ .bool = {} }) and
@@ -203,6 +226,19 @@ pub fn variadicCaseWhenSupported(args: []const compute.Datum) bool {
     return caseWhenStructSupported(args);
 }
 
+pub fn binaryFillNullSupported(args: []const compute.Datum) bool {
+    return args.len == 2 and
+        args[0].dataType().eql(args[1].dataType()) and
+        isSelectionSupportedType(args[0].dataType());
+}
+
+pub fn binaryTakeSupported(args: []const compute.Datum) bool {
+    return args.len == 2 and
+        (args[0].isArray() or args[0].isChunked()) and
+        isSelectionSupportedType(args[0].dataType()) and
+        isChooseIndexType(args[1].dataType());
+}
+
 pub fn resultI64(args: []const compute.Datum, options: compute.Options) compute.KernelError!compute.DataType {
     _ = options;
     if (args.len == 0) return error.InvalidArity;
@@ -226,6 +262,12 @@ pub fn resultI32(args: []const compute.Datum, options: compute.Options) compute.
         },
         else => error.InvalidOptions,
     };
+}
+
+pub fn resultF64(args: []const compute.Datum, options: compute.Options) compute.KernelError!compute.DataType {
+    _ = options;
+    if (args.len == 0) return error.InvalidArity;
+    return .{ .double = {} };
 }
 
 pub fn resultSameAsFirst(args: []const compute.Datum, options: compute.Options) compute.KernelError!compute.DataType {
@@ -260,6 +302,7 @@ pub fn setBit(data: []u8, bit_index: usize) void {
 pub fn readI64(value: compute.ExecChunkValue, logical_index: usize) compute.KernelError!i64 {
     return switch (value) {
         .scalar => |s| switch (s.value) {
+            .i32 => |v| @as(i64, v),
             .i64 => |v| v,
             else => error.InvalidInput,
         },

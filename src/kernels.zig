@@ -347,6 +347,36 @@ fn makeNestedScalarDatum(payload: zcore.ArrayRef) !compute.Datum {
     return compute.Datum.fromScalar(try compute.Scalar.initNested(payload.data().data_type, payload));
 }
 
+fn expectInt64ArrayValues(datum: compute.Datum, expected: []const ?i64) !void {
+    try std.testing.expect(datum.isArray());
+    const view = zcore.Int64Array{ .data = datum.array.data() };
+    try std.testing.expectEqual(expected.len, view.len());
+    var i: usize = 0;
+    while (i < expected.len) : (i += 1) {
+        if (expected[i]) |v| {
+            try std.testing.expect(!view.isNull(i));
+            try std.testing.expectEqual(v, view.value(i));
+        } else {
+            try std.testing.expect(view.isNull(i));
+        }
+    }
+}
+
+fn expectBoolArrayValues(datum: compute.Datum, expected: []const ?bool) !void {
+    try std.testing.expect(datum.isArray());
+    const view = zcore.BooleanArray{ .data = datum.array.data() };
+    try std.testing.expectEqual(expected.len, view.len());
+    var i: usize = 0;
+    while (i < expected.len) : (i += 1) {
+        if (expected[i]) |v| {
+            try std.testing.expect(!view.isNull(i));
+            try std.testing.expectEqual(v, view.value(i));
+        } else {
+            try std.testing.expect(view.isNull(i));
+        }
+    }
+}
+
 fn expectFixedSizeListAllNullAligned(out: compute.Datum, expected_len: usize, expected_list_size: usize) !void {
     try std.testing.expect(out.isArray());
     try std.testing.expect(out.dataType() == .fixed_size_list);
@@ -369,13 +399,16 @@ test "register base kernels exposes expected registry surface and resolvable sig
     defer registry.deinit();
     try registerBaseKernels(&registry);
 
-    try std.testing.expectEqual(@as(usize, 16), registry.functionCount());
+    try std.testing.expectEqual(@as(usize, 39), registry.functionCount());
 
     const vector_names = [_][]const u8{
         "add_i64",
         "filter",
         "filter_i64",
         "drop_null",
+        "take",
+        "array_take",
+        "indices_nonzero",
         "is_null",
         "is_valid",
         "true_unless_null",
@@ -383,10 +416,25 @@ test "register base kernels exposes expected registry surface and resolvable sig
         "coalesce",
         "choose",
         "case_when",
+        "fill_null",
+        "fill_null_forward",
+        "fill_null_backward",
+        "equal",
+        "not_equal",
+        "less",
+        "less_equal",
+        "greater",
+        "greater_equal",
+        "invert",
+        "and_",
+        "or_",
+        "and_kleene",
+        "or_kleene",
         "subtract_i64",
         "divide_i64",
         "multiply_i64",
         "cast_i64_to_i32",
+        "cast",
     };
     for (vector_names) |name| {
         try std.testing.expect(registry.containsFunction(name, .vector));
@@ -397,6 +445,11 @@ test "register base kernels exposes expected registry surface and resolvable sig
     try std.testing.expect(registry.containsFunction("count_rows", .aggregate));
     try std.testing.expectEqual(@as(usize, 1), registry.kernelCount("count_rows", .aggregate));
     try std.testing.expect(!registry.containsFunction("count_rows", .vector));
+    try std.testing.expect(registry.containsFunction("count", .aggregate));
+    try std.testing.expect(registry.containsFunction("sum", .aggregate));
+    try std.testing.expect(registry.containsFunction("min", .aggregate));
+    try std.testing.expect(registry.containsFunction("max", .aggregate));
+    try std.testing.expect(registry.containsFunction("mean", .aggregate));
     try std.testing.expectEqual(@as(usize, 0), registry.kernelCount("not_exist", .vector));
 
     var add_lhs = try makeInt64Array(allocator, &[_]?i64{1});
@@ -4256,4 +4309,222 @@ test "count_rows supports aggregate lifecycle merge/finalize" {
     defer out.release();
     try std.testing.expect(out.isScalar());
     try std.testing.expectEqual(@as(i64, 5), out.scalar.value.i64);
+}
+
+test "take and array_take support nullable indices" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeInt64Array(allocator, &[_]?i64{ 10, null, 30 });
+    defer values.release();
+    var indices = try makeInt32Array(allocator, &[_]?i32{ 2, 1, null, 0 });
+    defer indices.release();
+
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromArray(indices.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+    defer {
+        var d = args[1];
+        d.release();
+    }
+
+    var out_take = try ctx.invokeVector("take", args[0..], compute.Options.noneValue());
+    defer out_take.release();
+    try expectInt64ArrayValues(out_take, &[_]?i64{ 30, null, null, 10 });
+
+    var out_array_take = try ctx.invokeVector("array_take", args[0..], compute.Options.noneValue());
+    defer out_array_take.release();
+    try expectInt64ArrayValues(out_array_take, &[_]?i64{ 30, null, null, 10 });
+}
+
+test "fill_null family supports directional fill semantics" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeInt64Array(allocator, &[_]?i64{ null, 2, null, 4, null });
+    defer values.release();
+    const fill_args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int64 = {} },
+            .value = .{ .i64 = 9 },
+        }),
+    };
+    defer {
+        var d = fill_args[0];
+        d.release();
+    }
+    defer {
+        var d = fill_args[1];
+        d.release();
+    }
+
+    var filled = try ctx.invokeVector("fill_null", fill_args[0..], compute.Options.noneValue());
+    defer filled.release();
+    try expectInt64ArrayValues(filled, &[_]?i64{ 9, 2, 9, 4, 9 });
+
+    const unary_args = [_]compute.Datum{compute.Datum.fromArray(values.retain())};
+    defer {
+        var d = unary_args[0];
+        d.release();
+    }
+
+    var forward = try ctx.invokeVector("fill_null_forward", unary_args[0..], compute.Options.noneValue());
+    defer forward.release();
+    try expectInt64ArrayValues(forward, &[_]?i64{ null, 2, 2, 4, 4 });
+
+    var backward = try ctx.invokeVector("fill_null_backward", unary_args[0..], compute.Options.noneValue());
+    defer backward.release();
+    try expectInt64ArrayValues(backward, &[_]?i64{ 2, 2, 4, 4, null });
+}
+
+test "comparison and logical kernels support base semantics" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var lhs = try makeInt64Array(allocator, &[_]?i64{ 1, null, 3 });
+    defer lhs.release();
+    var rhs = try makeInt64Array(allocator, &[_]?i64{ 1, 2, 4 });
+    defer rhs.release();
+
+    const cmp_args = [_]compute.Datum{
+        compute.Datum.fromArray(lhs.retain()),
+        compute.Datum.fromArray(rhs.retain()),
+    };
+    defer {
+        var d = cmp_args[0];
+        d.release();
+    }
+    defer {
+        var d = cmp_args[1];
+        d.release();
+    }
+
+    var equal_out = try ctx.invokeVector("equal", cmp_args[0..], compute.Options.noneValue());
+    defer equal_out.release();
+    try expectBoolArrayValues(equal_out, &[_]?bool{ true, null, false });
+
+    var bl = try makeBoolArray(allocator, &[_]?bool{ false, null, true });
+    defer bl.release();
+    var br = try makeBoolArray(allocator, &[_]?bool{ null, true, null });
+    defer br.release();
+    const logical_args = [_]compute.Datum{
+        compute.Datum.fromArray(bl.retain()),
+        compute.Datum.fromArray(br.retain()),
+    };
+    defer {
+        var d = logical_args[0];
+        d.release();
+    }
+    defer {
+        var d = logical_args[1];
+        d.release();
+    }
+
+    var and_kleene_out = try ctx.invokeVector("and_kleene", logical_args[0..], compute.Options.noneValue());
+    defer and_kleene_out.release();
+    try expectBoolArrayValues(and_kleene_out, &[_]?bool{ false, null, null });
+
+    var or_kleene_out = try ctx.invokeVector("or_kleene", logical_args[0..], compute.Options.noneValue());
+    defer or_kleene_out.release();
+    try expectBoolArrayValues(or_kleene_out, &[_]?bool{ null, true, true });
+}
+
+test "cast supports numeric and bool subset" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var i32_values = try makeInt32Array(allocator, &[_]?i32{ 1, 0, 2 });
+    defer i32_values.release();
+    const args = [_]compute.Datum{compute.Datum.fromArray(i32_values.retain())};
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    var to_i64 = try ctx.invokeVector("cast", args[0..], .{
+        .cast = .{
+            .safe = true,
+            .to_type = .{ .int64 = {} },
+        },
+    });
+    defer to_i64.release();
+    try expectInt64ArrayValues(to_i64, &[_]?i64{ 1, 0, 2 });
+
+    try std.testing.expectError(
+        error.InvalidCast,
+        ctx.invokeVector("cast", args[0..], .{
+            .cast = .{
+                .safe = true,
+                .to_type = .{ .bool = {} },
+            },
+        }),
+    );
+
+    var to_bool = try ctx.invokeVector("cast", args[0..], .{
+        .cast = .{
+            .safe = false,
+            .to_type = .{ .bool = {} },
+        },
+    });
+    defer to_bool.release();
+    try expectBoolArrayValues(to_bool, &[_]?bool{ true, false, true });
+}
+
+test "aggregate count/sum/min/max/mean support int64" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeInt64Array(allocator, &[_]?i64{ 1, null, 3 });
+    defer values.release();
+    const args = [_]compute.Datum{compute.Datum.fromArray(values.retain())};
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    var count_out = try ctx.invokeAggregate("count", args[0..], compute.Options.noneValue());
+    defer count_out.release();
+    try std.testing.expect(count_out.isScalar());
+    try std.testing.expectEqual(@as(i64, 2), count_out.scalar.value.i64);
+
+    var sum_out = try ctx.invokeAggregate("sum", args[0..], compute.Options.noneValue());
+    defer sum_out.release();
+    try std.testing.expect(sum_out.isScalar());
+    try std.testing.expectEqual(@as(i64, 4), sum_out.scalar.value.i64);
+
+    var min_out = try ctx.invokeAggregate("min", args[0..], compute.Options.noneValue());
+    defer min_out.release();
+    try std.testing.expect(min_out.isScalar());
+    try std.testing.expectEqual(@as(i64, 1), min_out.scalar.value.i64);
+
+    var max_out = try ctx.invokeAggregate("max", args[0..], compute.Options.noneValue());
+    defer max_out.release();
+    try std.testing.expect(max_out.isScalar());
+    try std.testing.expectEqual(@as(i64, 3), max_out.scalar.value.i64);
+
+    var mean_out = try ctx.invokeAggregate("mean", args[0..], compute.Options.noneValue());
+    defer mean_out.release();
+    try std.testing.expect(mean_out.isScalar());
+    try std.testing.expectEqual(@as(f64, 2.0), mean_out.scalar.value.f64);
 }

@@ -15,6 +15,8 @@
 - `add_i64`（vector）
 - `filter`（vector，支持 `null/bool/定长类型/string/binary` values + `bool` predicate）
 - `drop_null`（vector，支持 `null/bool/定长类型/string/binary` values）
+- `take` / `array_take`（vector，支持可空整数索引）
+- `indices_nonzero`（vector，当前支持 `bool/int32/int64`）
 - `is_null`（vector，输出 `bool` 掩码）
 - `is_valid`（vector，输出 `bool` 掩码）
 - `true_unless_null`（vector，非 null 输出 `true`，null 输出 `false`）
@@ -22,11 +24,16 @@
 - `coalesce`（vector，可变参数，按行选择第一个非 null；值类型支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集）
 - `choose`（vector，可变参数，按 0-based 索引选择值；值类型支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集）
 - `case_when`（vector，Arrow 原生 `struct<bool...> + *cases`，支持可选 else；值类型支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集）
+- `fill_null` / `fill_null_forward` / `fill_null_backward`（vector）
+- `equal` / `not_equal` / `less` / `less_equal` / `greater` / `greater_equal`（vector，当前 `int64` 子集）
+- `invert` / `and_` / `or_` / `and_kleene` / `or_kleene`（vector，`bool`）
 - `subtract_i64`（vector）
 - `divide_i64`（vector）
 - `multiply_i64`（vector）
 - `cast_i64_to_i32`（vector）
+- `cast`（vector，当前 numeric/bool 子集）
 - `count_rows`（aggregate，支持 lifecycle）
+- `count` / `sum` / `min` / `max` / `mean`（aggregate，当前 `int64` 子集）
 
 注册入口：
 

@@ -8,6 +8,8 @@ It reuses the compute framework layer (`zarrow-core`) from [`tylitianrui/zarrow`
 - `add_i64` (vector)
 - `filter` (vector, supports `null/bool/fixed-width/string/binary` value types + `bool` predicate, `Options.filter`)
 - `drop_null` (vector, supports the same value type subset as `filter`, `Options.none`)
+- `take` / `array_take` (vector, nullable integer indices, `Options.none`)
+- `indices_nonzero` (vector, supports `bool/int32/int64`, `Options.none`)
 - `is_null` (vector, null bitmap to bool mask, `Options.none`)
 - `is_valid` (vector, inverse null bitmap to bool mask, `Options.none`)
 - `true_unless_null` (vector, true for non-null values and false for null values, `Options.none`)
@@ -15,11 +17,16 @@ It reuses the compute framework layer (`zarrow-core`) from [`tylitianrui/zarrow`
 - `coalesce` (vector, variadic, select first non-null value, supports `null/bool/fixed-width/string/binary/list/large_list/struct` subset, `Options.none`)
 - `choose` (vector, variadic, select value by 0-based index, supports `null/bool/fixed-width/string/binary/list/large_list/struct` subset, `Options.none`)
 - `case_when` (vector, Arrow-native `struct<bool...> + *cases` with optional else, supports `null/bool/fixed-width/string/binary/list/large_list/struct` subset, `Options.none`)
+- `fill_null` / `fill_null_forward` / `fill_null_backward` (vector, `Options.none`)
+- `equal` / `not_equal` / `less` / `less_equal` / `greater` / `greater_equal` (vector, current `int64` subset, `Options.none`)
+- `invert` / `and_` / `or_` / `and_kleene` / `or_kleene` (vector, `bool`, `Options.none`)
 - `subtract_i64` (vector)
 - `divide_i64` (vector)
 - `multiply_i64` (vector)
 - `cast_i64_to_i32` (vector)
+- `cast` (vector, current numeric/bool subset, `Options.cast`)
 - `count_rows` (aggregate with stateful lifecycle)
+- `count` / `sum` / `min` / `max` / `mean` (aggregate, current `int64` subset)
 
 ## Quick Start
 
