@@ -142,7 +142,17 @@ fn concatFilteredListValues(
     kind: ListKind,
 ) compute.KernelError!zcore.ArrayRef {
     if (selected_values.len == 0) {
-        return try firstMatchingListValuesRefFromArgs(args, data_type, kind);
+        _ = args;
+        _ = data_type;
+        _ = kind;
+        var empty = compute.datumBuildEmptyLikeWithAllocator(allocator, value_type) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.UnsupportedType => error.UnsupportedType,
+            else => error.InvalidInput,
+        };
+        errdefer empty.release();
+        if (!empty.isArray()) return error.InvalidInput;
+        return empty.array.retain();
     }
     return compute.concatArrayRefs(allocator, value_type, selected_values) catch |err| return mapConcatArrayError(err);
 }
@@ -711,42 +721,14 @@ pub fn filterKernel(
         else => return error.InvalidOptions,
     };
     const data_type = args[0].dataType();
-    return switch (data_type) {
-        .null => blk: {
-            const input_len = try compute.inferBinaryExecLen(args[0], args[1]);
-            var builder = try zcore.NullBuilder.init(ctx.tempAllocator(), input_len);
-            defer builder.deinit();
-            var iter = try compute.BinaryExecChunkIterator.init(args[0], args[1]);
-            while (try iter.next()) |chunk_value| {
-                var chunk = chunk_value;
-                defer chunk.deinit();
-                var i: usize = 0;
-                while (i < chunk.len) : (i += 1) {
-                    if (chunk.rhs.isNullAt(i)) {
-                        if (filter_opts.drop_nulls) continue;
-                        builder.appendNull() catch |err| return common.kernelAppendError(err);
-                        continue;
-                    }
-                    if (!(try common.readBool(chunk.rhs, i))) continue;
-                    builder.appendNull() catch |err| return common.kernelAppendError(err);
-                }
-            }
-            const out = builder.finish() catch |err| return common.kernelAppendError(err);
-            break :blk compute.Datum.fromArray(out);
-        },
-        .bool => filterBoolKernel(ctx, args, filter_opts),
-        .string => filterStringKernel(ctx, args, filter_opts, .string),
-        .large_string => filterStringKernel(ctx, args, filter_opts, .large_string),
-        .string_view => filterStringKernel(ctx, args, filter_opts, .string_view),
-        .binary => filterBinaryKernel(ctx, args, filter_opts, .binary),
-        .large_binary => filterBinaryKernel(ctx, args, filter_opts, .large_binary),
-        .binary_view => filterBinaryKernel(ctx, args, filter_opts, .binary_view),
-        .list, .large_list, .fixed_size_list => filterListKernel(ctx, args, filter_opts, data_type),
-        .struct_ => filterStructKernel(ctx, args, filter_opts, data_type),
-        else => blk: {
-            if (!common.isFilterFixedWidthType(data_type)) break :blk error.UnsupportedType;
-            break :blk filterFixedWidthKernel(ctx, args, filter_opts, data_type);
-        },
+    if (data_type == .fixed_size_list) {
+        return filterListKernel(ctx, args, filter_opts, data_type);
+    }
+    return compute.datumFilter(args[0], args[1], filter_opts) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.UnsupportedType => error.UnsupportedType,
+        error.InvalidArity => error.InvalidArity,
+        else => error.InvalidInput,
     };
 }
 

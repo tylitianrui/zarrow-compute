@@ -761,7 +761,17 @@ fn concatSelectedListValues(
     kind: ListKind,
 ) compute.KernelError!zcore.ArrayRef {
     if (selected_values.len == 0) {
-        return try firstMatchingListValuesRefFromArgs(args, data_type, kind);
+        _ = args;
+        _ = data_type;
+        _ = kind;
+        var empty = compute.datumBuildEmptyLikeWithAllocator(allocator, value_type) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.UnsupportedType => error.UnsupportedType,
+            else => error.InvalidInput,
+        };
+        errdefer empty.release();
+        if (!empty.isArray()) return error.InvalidInput;
+        return empty.array.retain();
     }
 
     return compute.concatArrayRefs(allocator, value_type, selected_values) catch |err| return mapConcatArrayError(err);
@@ -991,22 +1001,39 @@ pub fn ifElseKernel(
     if (!args[0].dataType().eql(.{ .bool = {} })) return error.InvalidInput;
     const data_type = args[1].dataType();
     if (!data_type.eql(args[2].dataType())) return error.InvalidInput;
+    if (data_type == .fixed_size_list) {
+        return ifElseListKernel(ctx, args, data_type);
+    }
+    const out_len = try inferTernaryExecLen(args[0], args[1], args[2]);
+    const selection_indices = ctx.tempAllocator().alloc(?usize, out_len) catch return error.OutOfMemory;
+    defer ctx.tempAllocator().free(selection_indices);
 
-    return switch (data_type) {
-        .null => ifElseNullKernel(ctx, args),
-        .bool => ifElseBoolKernel(ctx, args),
-        .string => ifElseStringKernel(ctx, args, .string),
-        .large_string => ifElseStringKernel(ctx, args, .large_string),
-        .string_view => ifElseStringKernel(ctx, args, .string_view),
-        .binary => ifElseBinaryKernel(ctx, args, .binary),
-        .large_binary => ifElseBinaryKernel(ctx, args, .large_binary),
-        .binary_view => ifElseBinaryKernel(ctx, args, .binary_view),
-        .list, .large_list, .fixed_size_list => ifElseListKernel(ctx, args, data_type),
-        .struct_ => ifElseStructKernel(ctx, args, data_type),
-        else => blk: {
-            if (!common.isFilterFixedWidthType(data_type)) break :blk error.UnsupportedType;
-            break :blk ifElseFixedWidthKernel(ctx, args, data_type);
-        },
+    var produced: usize = 0;
+    var iter = try compute.NaryExecChunkIterator.init(ctx.tempAllocator(), args);
+    defer iter.deinit();
+    while (try iter.next()) |chunk_value| {
+        var chunk = chunk_value;
+        defer chunk.deinit();
+        var i: usize = 0;
+        while (i < chunk.len) : (i += 1) {
+            const out_index = produced + i;
+            const cond = chunk.values[0];
+            if (cond.isNullAt(i)) {
+                selection_indices[out_index] = null;
+                continue;
+            }
+            selection_indices[out_index] = if (try common.readBool(cond, i)) 0 else 1;
+        }
+        produced += chunk.len;
+    }
+    if (produced != out_len) return error.InvalidInput;
+
+    const values = [_]compute.Datum{ args[1], args[2] };
+    return compute.datumSelectNullable(selection_indices, values[0..]) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.UnsupportedType => error.UnsupportedType,
+        error.InvalidArity => error.InvalidArity,
+        else => error.InvalidInput,
     };
 }
 
@@ -1831,21 +1858,60 @@ fn runSelectionKernel(
     config: SelectionConfig,
     data_type: compute.DataType,
 ) compute.KernelError!compute.Datum {
-    return switch (data_type) {
-        .null => selectNullKernel(ctx, args, config),
-        .bool => selectBoolKernel(ctx, args, config),
-        .string => selectStringKernel(ctx, args, config, .string),
-        .large_string => selectStringKernel(ctx, args, config, .large_string),
-        .string_view => selectStringKernel(ctx, args, config, .string_view),
-        .binary => selectBinaryKernel(ctx, args, config, .binary),
-        .large_binary => selectBinaryKernel(ctx, args, config, .large_binary),
-        .binary_view => selectBinaryKernel(ctx, args, config, .binary_view),
-        .list, .large_list, .fixed_size_list => selectListKernel(ctx, args, config, data_type),
-        .struct_ => selectStructKernel(ctx, args, config, data_type),
-        else => blk: {
-            if (!common.isFilterFixedWidthType(data_type)) break :blk error.UnsupportedType;
-            break :blk selectFixedWidthKernel(ctx, args, config, data_type);
-        },
+    if (data_type == .fixed_size_list) {
+        return selectListKernel(ctx, args, config, data_type);
+    }
+
+    const out_len = try compute.inferNaryExecLen(args);
+    const value_arg_count = selectionValueArgCount(config, args.len);
+    const value_arg_indices = ctx.tempAllocator().alloc(usize, value_arg_count) catch return error.OutOfMemory;
+    defer ctx.tempAllocator().free(value_arg_indices);
+    try fillSelectionValueArgIndices(value_arg_indices, config, args.len);
+
+    const selection_indices = ctx.tempAllocator().alloc(?usize, out_len) catch return error.OutOfMemory;
+    defer ctx.tempAllocator().free(selection_indices);
+
+    var produced: usize = 0;
+    var iter = try compute.NaryExecChunkIterator.init(ctx.tempAllocator(), args);
+    defer iter.deinit();
+    while (try iter.next()) |chunk_value| {
+        var chunk = chunk_value;
+        defer chunk.deinit();
+
+        var i: usize = 0;
+        while (i < chunk.len) : (i += 1) {
+            const out_index = produced + i;
+            const selected_index = try resolveSelectedArgIndex(chunk.values, i, config);
+            if (selected_index == null) {
+                selection_indices[out_index] = null;
+                continue;
+            }
+
+            const selected_arg_index = selected_index.?;
+            const selected = chunk.values[selected_arg_index];
+            if (selected.isNullAt(i)) {
+                selection_indices[out_index] = null;
+                continue;
+            }
+
+            const slot = selectionValueSlotForArgIndex(value_arg_indices, selected_arg_index) orelse return error.InvalidInput;
+            selection_indices[out_index] = slot;
+        }
+        produced += chunk.len;
+    }
+    if (produced != out_len) return error.InvalidInput;
+
+    const values = ctx.tempAllocator().alloc(compute.Datum, value_arg_count) catch return error.OutOfMemory;
+    defer ctx.tempAllocator().free(values);
+    for (value_arg_indices, 0..) |arg_index, slot| {
+        values[slot] = args[arg_index];
+    }
+
+    return compute.datumSelectNullable(selection_indices, values) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.UnsupportedType => error.UnsupportedType,
+        error.InvalidArity => error.InvalidArity,
+        else => error.InvalidInput,
     };
 }
 
