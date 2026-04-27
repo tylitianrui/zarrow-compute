@@ -49,6 +49,12 @@ if_else => [1, null, 10]
 coalesce => [1, 7, 3]
 choose => [1, null, null]
 case_when => [10, null, null]
+filter_fixed_size_list => [[1, 2], null, [5, 6]]
+drop_null_fixed_size_list => [[11, 12], [15, 16], [17, 18]]
+if_else_fixed_size_list => [[1, 2], null, null, [7, 8]]
+coalesce_fixed_size_list => [[11, 12], [23, 24], [15, 16], [17, 18]]
+choose_fixed_size_list => [[1, 2], null, null, [27, 28]]
+case_when_fixed_size_list => [[1, 2], null, null, [17, 18]]
 count_rows => 3
 ```
 

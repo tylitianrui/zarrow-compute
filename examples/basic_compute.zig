@@ -4,9 +4,15 @@ const zcompute = @import("zarrow_compute");
 
 const compute = zcore.compute;
 const DT_BOOL = zcore.DataType{ .bool = {} };
+const DT_I32 = zcore.DataType{ .int32 = {} };
 const STRUCT_FIELDS_BOOL2 = [_]zcore.Field{
     .{ .name = "c0", .data_type = &DT_BOOL, .nullable = true },
     .{ .name = "c1", .data_type = &DT_BOOL, .nullable = true },
+};
+const FIELD_LIST_ITEM_I32 = zcore.Field{
+    .name = "item",
+    .data_type = &DT_I32,
+    .nullable = true,
 };
 
 fn makeInt64Array(allocator: std.mem.Allocator, values: []const ?i64) !zcore.ArrayRef {
@@ -74,6 +80,35 @@ fn makeStructBool2Array(
     return builder.finish(&[_]zcore.ArrayRef{ cond0, cond1 });
 }
 
+fn makeFixedSizeListInt32Array(
+    allocator: std.mem.Allocator,
+    list_size: usize,
+    present: []const bool,
+    values: []const i32,
+) !zcore.ArrayRef {
+    const expected_values_len = std.math.mul(usize, present.len, list_size) catch return error.InvalidInput;
+    if (expected_values_len != values.len) return error.InvalidInput;
+
+    var values_builder = try zcore.Int32Builder.init(allocator, values.len);
+    defer values_builder.deinit();
+    for (values) |value| {
+        try values_builder.append(value);
+    }
+    var values_ref = try values_builder.finish();
+    defer values_ref.release();
+
+    var builder = try zcore.FixedSizeListBuilder.init(allocator, FIELD_LIST_ITEM_I32, list_size);
+    defer builder.deinit();
+    for (present) |is_present| {
+        if (is_present) {
+            try builder.appendValid();
+        } else {
+            try builder.appendNull();
+        }
+    }
+    return builder.finish(values_ref);
+}
+
 fn printInt64DatumLine(label: []const u8, datum: compute.Datum) !void {
     if (!datum.isArray()) return error.InvalidInput;
     const view = zcore.Int64Array{ .data = datum.array.data() };
@@ -103,6 +138,39 @@ fn printBoolDatumLine(label: []const u8, datum: compute.Datum) !void {
         } else {
             std.debug.print("{}", .{view.value(i)});
         }
+    }
+    std.debug.print("]\n", .{});
+}
+
+fn printFixedSizeListInt32DatumLine(label: []const u8, datum: compute.Datum) !void {
+    if (!datum.isArray()) return error.InvalidInput;
+    if (datum.dataType() != .fixed_size_list) return error.InvalidInput;
+
+    const list_view = zcore.FixedSizeListArray{ .data = datum.array.data() };
+    std.debug.print("{s} => [", .{label});
+    var row: usize = 0;
+    while (row < list_view.len()) : (row += 1) {
+        if (row != 0) std.debug.print(", ", .{});
+        if (list_view.isNull(row)) {
+            std.debug.print("null", .{});
+            continue;
+        }
+
+        var row_ref = try list_view.value(row);
+        defer row_ref.release();
+        const row_i32 = zcore.Int32Array{ .data = row_ref.data() };
+        std.debug.print("[", .{});
+        var col: usize = 0;
+        while (col < row_i32.len()) : (col += 1) {
+            if (col != 0) std.debug.print(", ", .{});
+            if (row_i32.isNull(col)) {
+                std.debug.print("null", .{});
+            } else {
+                const value = row_i32.value(col) catch return error.InvalidInput;
+                std.debug.print("{d}", .{value});
+            }
+        }
+        std.debug.print("]", .{});
     }
     std.debug.print("]\n", .{});
 }
@@ -287,6 +355,158 @@ pub fn main() !void {
     var case_when_out = try ctx.invokeVector("case_when", case_when_args[0..], compute.Options.noneValue());
     defer case_when_out.release();
     try printInt64DatumLine("case_when", case_when_out);
+
+    var fs_a = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, true, true, true },
+        &[_]i32{ 1, 2, 3, 4, 5, 6, 7, 8 },
+    );
+    defer fs_a.release();
+    var fs_b = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, false, true, true },
+        &[_]i32{ 11, 12, 13, 14, 15, 16, 17, 18 },
+    );
+    defer fs_b.release();
+    var fs_else = try makeFixedSizeListInt32Array(
+        allocator,
+        2,
+        &[_]bool{ true, true, false, true },
+        &[_]i32{ 21, 22, 23, 24, 25, 26, 27, 28 },
+    );
+    defer fs_else.release();
+
+    var fs_filter_pred = try makeBoolArray(allocator, &[_]?bool{ true, null, true, false });
+    defer fs_filter_pred.release();
+    const fs_filter_args = [_]compute.Datum{
+        compute.Datum.fromArray(fs_a.retain()),
+        compute.Datum.fromArray(fs_filter_pred.retain()),
+    };
+    defer {
+        var d = fs_filter_args[0];
+        d.release();
+    }
+    defer {
+        var d = fs_filter_args[1];
+        d.release();
+    }
+    var fs_filter_out = try ctx.invokeVector("filter", fs_filter_args[0..], .{
+        .filter = .{ .drop_nulls = false },
+    });
+    defer fs_filter_out.release();
+    try printFixedSizeListInt32DatumLine("filter_fixed_size_list", fs_filter_out);
+
+    const fs_drop_null_args = [_]compute.Datum{
+        compute.Datum.fromArray(fs_b.retain()),
+    };
+    defer {
+        var d = fs_drop_null_args[0];
+        d.release();
+    }
+    var fs_drop_null_out = try ctx.invokeVector("drop_null", fs_drop_null_args[0..], compute.Options.noneValue());
+    defer fs_drop_null_out.release();
+    try printFixedSizeListInt32DatumLine("drop_null_fixed_size_list", fs_drop_null_out);
+
+    var fs_if_else_cond = try makeBoolArray(allocator, &[_]?bool{ true, false, null, true });
+    defer fs_if_else_cond.release();
+    const fs_if_else_args = [_]compute.Datum{
+        compute.Datum.fromArray(fs_if_else_cond.retain()),
+        compute.Datum.fromArray(fs_a.retain()),
+        compute.Datum.fromArray(fs_b.retain()),
+    };
+    defer {
+        var d = fs_if_else_args[0];
+        d.release();
+    }
+    defer {
+        var d = fs_if_else_args[1];
+        d.release();
+    }
+    defer {
+        var d = fs_if_else_args[2];
+        d.release();
+    }
+    var fs_if_else_out = try ctx.invokeVector("if_else", fs_if_else_args[0..], compute.Options.noneValue());
+    defer fs_if_else_out.release();
+    try printFixedSizeListInt32DatumLine("if_else_fixed_size_list", fs_if_else_out);
+
+    const fs_coalesce_args = [_]compute.Datum{
+        compute.Datum.fromArray(fs_b.retain()),
+        compute.Datum.fromArray(fs_else.retain()),
+    };
+    defer {
+        var d = fs_coalesce_args[0];
+        d.release();
+    }
+    defer {
+        var d = fs_coalesce_args[1];
+        d.release();
+    }
+    var fs_coalesce_out = try ctx.invokeVector("coalesce", fs_coalesce_args[0..], compute.Options.noneValue());
+    defer fs_coalesce_out.release();
+    try printFixedSizeListInt32DatumLine("coalesce_fixed_size_list", fs_coalesce_out);
+
+    var fs_choose_indices = try makeInt32Array(allocator, &[_]?i32{ 0, 1, null, 2 });
+    defer fs_choose_indices.release();
+    const fs_choose_args = [_]compute.Datum{
+        compute.Datum.fromArray(fs_choose_indices.retain()),
+        compute.Datum.fromArray(fs_a.retain()),
+        compute.Datum.fromArray(fs_b.retain()),
+        compute.Datum.fromArray(fs_else.retain()),
+    };
+    defer {
+        var d = fs_choose_args[0];
+        d.release();
+    }
+    defer {
+        var d = fs_choose_args[1];
+        d.release();
+    }
+    defer {
+        var d = fs_choose_args[2];
+        d.release();
+    }
+    defer {
+        var d = fs_choose_args[3];
+        d.release();
+    }
+    var fs_choose_out = try ctx.invokeVector("choose", fs_choose_args[0..], compute.Options.noneValue());
+    defer fs_choose_out.release();
+    try printFixedSizeListInt32DatumLine("choose_fixed_size_list", fs_choose_out);
+
+    var fs_case_cond0 = try makeBoolArray(allocator, &[_]?bool{ true, false, false, null });
+    defer fs_case_cond0.release();
+    var fs_case_cond1 = try makeBoolArray(allocator, &[_]?bool{ false, true, false, true });
+    defer fs_case_cond1.release();
+    var fs_case_conds = try makeStructBool2Array(allocator, fs_case_cond0, fs_case_cond1);
+    defer fs_case_conds.release();
+    const fs_case_when_args = [_]compute.Datum{
+        compute.Datum.fromArray(fs_case_conds.retain()),
+        compute.Datum.fromArray(fs_a.retain()),
+        compute.Datum.fromArray(fs_b.retain()),
+        compute.Datum.fromArray(fs_else.retain()),
+    };
+    defer {
+        var d = fs_case_when_args[0];
+        d.release();
+    }
+    defer {
+        var d = fs_case_when_args[1];
+        d.release();
+    }
+    defer {
+        var d = fs_case_when_args[2];
+        d.release();
+    }
+    defer {
+        var d = fs_case_when_args[3];
+        d.release();
+    }
+    var fs_case_when_out = try ctx.invokeVector("case_when", fs_case_when_args[0..], compute.Options.noneValue());
+    defer fs_case_when_out.release();
+    try printFixedSizeListInt32DatumLine("case_when_fixed_size_list", fs_case_when_out);
 
     var count = try ctx.invokeAggregate("count_rows", args[0..1], compute.Options.noneValue());
     defer count.release();
