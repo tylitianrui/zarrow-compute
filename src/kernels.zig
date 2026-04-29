@@ -399,11 +399,12 @@ test "register base kernels exposes expected registry surface and resolvable sig
     defer registry.deinit();
     try registerBaseKernels(&registry);
 
-    try std.testing.expectEqual(@as(usize, 42), registry.functionCount());
+    try std.testing.expectEqual(@as(usize, 43), registry.functionCount());
 
     const vector_names = [_][]const u8{
         "add_i64",
         "filter",
+        "array_filter",
         "filter_i64",
         "drop_null",
         "take",
@@ -497,6 +498,10 @@ test "register base kernels exposes expected registry surface and resolvable sig
         .filter = .{},
     });
     try std.testing.expect(filter_ty.eql(.{ .int32 = {} }));
+    const array_filter_ty = try registry.resolveResultType("array_filter", .vector, filter_args[0..], .{
+        .filter = .{},
+    });
+    try std.testing.expect(array_filter_ty.eql(.{ .int32 = {} }));
 
     const drop_null_args = [_]compute.Datum{
         compute.Datum.fromArray(filter_values.retain()),
@@ -690,6 +695,7 @@ test "register compat kernels matches base registry surface" {
     const vector_names = [_][]const u8{
         "add_i64",
         "filter",
+        "array_filter",
         "filter_i64",
         "drop_null",
         "is_null",
@@ -795,6 +801,10 @@ test "filter keeps selected values, propagates value nulls, and drops null predi
     try std.testing.expectEqual(@as(usize, 2), view.len());
     try std.testing.expectEqual(@as(i64, 1), view.value(0));
     try std.testing.expect(view.isNull(1));
+
+    var array_filter_out = try ctx.invokeVector("array_filter", args[0..], .{ .filter = .{} });
+    defer array_filter_out.release();
+    try expectInt64ArrayValues(array_filter_out, &[_]?i64{ 1, null });
 }
 
 test "filter emits null for null predicate when drop_nulls is false" {

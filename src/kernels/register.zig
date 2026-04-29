@@ -32,6 +32,16 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
         .exec = filter.filterKernel,
     });
 
+    try registry.registerVectorKernel("array_filter", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = common.binarySupportedFilter,
+            .options_check = common.onlyFilterOptions,
+            .result_type_fn = common.resultSameAsFirst,
+        },
+        .exec = filter.filterKernel,
+    });
+
     try registry.registerVectorKernel("filter_i64", .{
         .signature = .{
             .arity = 2,
