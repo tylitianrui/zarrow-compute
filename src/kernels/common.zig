@@ -51,6 +51,19 @@ pub fn binaryInt64(args: []const compute.Datum) bool {
         args[1].dataType().eql(.{ .int64 = {} });
 }
 
+pub fn isArithmeticComparableType(data_type: compute.DataType) bool {
+    return switch (data_type) {
+        .int32, .int64, .double => true,
+        else => false,
+    };
+}
+
+pub fn binaryArithmeticComparable(args: []const compute.Datum) bool {
+    return args.len == 2 and
+        args[0].dataType().eql(args[1].dataType()) and
+        isArithmeticComparableType(args[0].dataType());
+}
+
 pub fn binaryInt64Bool(args: []const compute.Datum) bool {
     return args.len == 2 and
         args[0].dataType().eql(.{ .int64 = {} }) and
@@ -318,6 +331,36 @@ pub fn readI64(value: compute.ExecChunkValue, logical_index: usize) compute.Kern
                 break :blk @as(i64, v);
             }
             break :blk error.UnsupportedType;
+        },
+    };
+}
+
+pub fn readI32(value: compute.ExecChunkValue, logical_index: usize) compute.KernelError!i32 {
+    return switch (value) {
+        .scalar => |s| switch (s.value) {
+            .i32 => |v| v,
+            else => error.InvalidInput,
+        },
+        .array => |arr| blk: {
+            const dt = arr.data().data_type;
+            if (!dt.eql(.{ .int32 = {} })) break :blk error.UnsupportedType;
+            const view = zcore.Int32Array{ .data = arr.data() };
+            break :blk view.value(logical_index) catch return error.InvalidInput;
+        },
+    };
+}
+
+pub fn readF64(value: compute.ExecChunkValue, logical_index: usize) compute.KernelError!f64 {
+    return switch (value) {
+        .scalar => |s| switch (s.value) {
+            .f64 => |v| v,
+            else => error.InvalidInput,
+        },
+        .array => |arr| blk: {
+            const dt = arr.data().data_type;
+            if (!dt.eql(.{ .double = {} })) break :blk error.UnsupportedType;
+            const view = zcore.Float64Array{ .data = arr.data() };
+            break :blk view.value(logical_index) catch return error.InvalidInput;
         },
     };
 }
