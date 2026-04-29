@@ -275,6 +275,26 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
         .exec = logical.orKernel,
     });
 
+    try registry.registerVectorKernel("xor", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = common.binaryBool,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultBool,
+        },
+        .exec = logical.xorKernel,
+    });
+
+    try registry.registerVectorKernel("and_not", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = common.binaryBool,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultBool,
+        },
+        .exec = logical.andNotKernel,
+    });
+
     try registry.registerVectorKernel("and_kleene", .{
         .signature = .{
             .arity = 2,
@@ -283,6 +303,16 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
             .result_type_fn = common.resultBool,
         },
         .exec = logical.andKleeneKernel,
+    });
+
+    try registry.registerVectorKernel("and_not_kleene", .{
+        .signature = .{
+            .arity = 2,
+            .type_check = common.binaryBool,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultBool,
+        },
+        .exec = logical.andNotKleeneKernel,
     });
 
     try registry.registerVectorKernel("or_kleene", .{
