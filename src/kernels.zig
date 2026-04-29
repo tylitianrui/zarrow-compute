@@ -399,7 +399,7 @@ test "register base kernels exposes expected registry surface and resolvable sig
     defer registry.deinit();
     try registerBaseKernels(&registry);
 
-    try std.testing.expectEqual(@as(usize, 39), registry.functionCount());
+    try std.testing.expectEqual(@as(usize, 42), registry.functionCount());
 
     const vector_names = [_][]const u8{
         "add_i64",
@@ -428,7 +428,10 @@ test "register base kernels exposes expected registry surface and resolvable sig
         "invert",
         "and_",
         "or_",
+        "xor",
+        "and_not",
         "and_kleene",
+        "and_not_kleene",
         "or_kleene",
         "subtract_i64",
         "divide_i64",
@@ -4438,6 +4441,18 @@ test "comparison and logical kernels support base semantics" {
     var and_kleene_out = try ctx.invokeVector("and_kleene", logical_args[0..], compute.Options.noneValue());
     defer and_kleene_out.release();
     try expectBoolArrayValues(and_kleene_out, &[_]?bool{ false, null, null });
+
+    var xor_out = try ctx.invokeVector("xor", logical_args[0..], compute.Options.noneValue());
+    defer xor_out.release();
+    try expectBoolArrayValues(xor_out, &[_]?bool{ null, null, null });
+
+    var and_not_out = try ctx.invokeVector("and_not", logical_args[0..], compute.Options.noneValue());
+    defer and_not_out.release();
+    try expectBoolArrayValues(and_not_out, &[_]?bool{ null, null, null });
+
+    var and_not_kleene_out = try ctx.invokeVector("and_not_kleene", logical_args[0..], compute.Options.noneValue());
+    defer and_not_kleene_out.release();
+    try expectBoolArrayValues(and_not_kleene_out, &[_]?bool{ false, null, true });
 
     var or_kleene_out = try ctx.invokeVector("or_kleene", logical_args[0..], compute.Options.noneValue());
     defer or_kleene_out.release();
