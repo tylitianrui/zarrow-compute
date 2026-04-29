@@ -15,9 +15,9 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
     try registry.registerVectorKernel("add_i64", .{
         .signature = .{
             .arity = 2,
-            .type_check = common.binaryInt64,
+            .type_check = common.binaryArithmeticComparable,
             .options_check = common.onlyArithmeticOptions,
-            .result_type_fn = common.resultI64,
+            .result_type_fn = common.resultSameAsFirst,
         },
         .exec = arithmetic.addI64Kernel,
     });
@@ -198,7 +198,7 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
     try registry.registerVectorKernel("equal", .{
         .signature = .{
             .arity = 2,
-            .type_check = common.binaryInt64,
+            .type_check = common.binaryArithmeticComparable,
             .options_check = common.onlyNoOptions,
             .result_type_fn = common.resultBool,
         },
@@ -208,7 +208,7 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
     try registry.registerVectorKernel("not_equal", .{
         .signature = .{
             .arity = 2,
-            .type_check = common.binaryInt64,
+            .type_check = common.binaryArithmeticComparable,
             .options_check = common.onlyNoOptions,
             .result_type_fn = common.resultBool,
         },
@@ -218,7 +218,7 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
     try registry.registerVectorKernel("less", .{
         .signature = .{
             .arity = 2,
-            .type_check = common.binaryInt64,
+            .type_check = common.binaryArithmeticComparable,
             .options_check = common.onlyNoOptions,
             .result_type_fn = common.resultBool,
         },
@@ -228,7 +228,7 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
     try registry.registerVectorKernel("less_equal", .{
         .signature = .{
             .arity = 2,
-            .type_check = common.binaryInt64,
+            .type_check = common.binaryArithmeticComparable,
             .options_check = common.onlyNoOptions,
             .result_type_fn = common.resultBool,
         },
@@ -238,7 +238,7 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
     try registry.registerVectorKernel("greater", .{
         .signature = .{
             .arity = 2,
-            .type_check = common.binaryInt64,
+            .type_check = common.binaryArithmeticComparable,
             .options_check = common.onlyNoOptions,
             .result_type_fn = common.resultBool,
         },
@@ -248,7 +248,7 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
     try registry.registerVectorKernel("greater_equal", .{
         .signature = .{
             .arity = 2,
-            .type_check = common.binaryInt64,
+            .type_check = common.binaryArithmeticComparable,
             .options_check = common.onlyNoOptions,
             .result_type_fn = common.resultBool,
         },
@@ -338,9 +338,9 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
     try registry.registerVectorKernel("subtract_i64", .{
         .signature = .{
             .arity = 2,
-            .type_check = common.binaryInt64,
+            .type_check = common.binaryArithmeticComparable,
             .options_check = common.onlyArithmeticOptions,
-            .result_type_fn = common.resultI64,
+            .result_type_fn = common.resultSameAsFirst,
         },
         .exec = arithmetic.subtractI64Kernel,
     });
@@ -348,9 +348,9 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
     try registry.registerVectorKernel("divide_i64", .{
         .signature = .{
             .arity = 2,
-            .type_check = common.binaryInt64,
+            .type_check = common.binaryArithmeticComparable,
             .options_check = common.onlyArithmeticOptions,
-            .result_type_fn = common.resultI64,
+            .result_type_fn = common.resultSameAsFirst,
         },
         .exec = arithmetic.divideI64Kernel,
     });
@@ -358,9 +358,9 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
     try registry.registerVectorKernel("multiply_i64", .{
         .signature = .{
             .arity = 2,
-            .type_check = common.binaryInt64,
+            .type_check = common.binaryArithmeticComparable,
             .options_check = common.onlyArithmeticOptions,
-            .result_type_fn = common.resultI64,
+            .result_type_fn = common.resultSameAsFirst,
         },
         .exec = arithmetic.multiplyI64Kernel,
     });

@@ -2,64 +2,109 @@ const zcore = @import("zarrow-core");
 const common = @import("common.zig");
 
 const compute = common.compute;
+const CompareOp = enum { equal, not_equal, less, less_equal, greater, greater_equal };
 
-fn compareI64Kernel(
+fn applyCompareI32(lhs: i32, rhs: i32, op: CompareOp) bool {
+    return switch (op) {
+        .equal => lhs == rhs,
+        .not_equal => lhs != rhs,
+        .less => lhs < rhs,
+        .less_equal => lhs <= rhs,
+        .greater => lhs > rhs,
+        .greater_equal => lhs >= rhs,
+    };
+}
+
+fn applyCompareI64(lhs: i64, rhs: i64, op: CompareOp) bool {
+    return switch (op) {
+        .equal => lhs == rhs,
+        .not_equal => lhs != rhs,
+        .less => lhs < rhs,
+        .less_equal => lhs <= rhs,
+        .greater => lhs > rhs,
+        .greater_equal => lhs >= rhs,
+    };
+}
+
+fn applyCompareF64(lhs: f64, rhs: f64, op: CompareOp) bool {
+    return switch (op) {
+        .equal => lhs == rhs,
+        .not_equal => lhs != rhs,
+        .less => lhs < rhs,
+        .less_equal => lhs <= rhs,
+        .greater => lhs > rhs,
+        .greater_equal => lhs >= rhs,
+    };
+}
+
+fn compareKernel(
     ctx: *compute.ExecContext,
     args: []const compute.Datum,
     options: compute.Options,
-    comptime op: fn (i64, i64) bool,
+    op: CompareOp,
 ) compute.KernelError!compute.Datum {
     if (args.len != 2) return error.InvalidArity;
     if (!common.onlyNoOptions(options)) return error.InvalidOptions;
-    if (!common.binaryInt64(args)) return error.InvalidInput;
+    if (!common.binaryArithmeticComparable(args)) return error.InvalidInput;
 
     const out_len = try compute.inferBinaryExecLen(args[0], args[1]);
     var builder = try zcore.BooleanBuilder.init(ctx.tempAllocator(), out_len);
     defer builder.deinit();
-
     var iter = try compute.BinaryExecChunkIterator.init(args[0], args[1]);
-    while (try iter.next()) |chunk_value| {
-        var chunk = chunk_value;
-        defer chunk.deinit();
-
-        var i: usize = 0;
-        while (i < chunk.len) : (i += 1) {
-            if (chunk.binaryNullAt(i)) {
-                builder.appendNull() catch |err| return common.kernelAppendError(err);
-                continue;
+    switch (args[0].dataType()) {
+        .int32 => {
+            while (try iter.next()) |chunk_value| {
+                var chunk = chunk_value;
+                defer chunk.deinit();
+                var i: usize = 0;
+                while (i < chunk.len) : (i += 1) {
+                    if (chunk.binaryNullAt(i)) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+                    const lhs = try common.readI32(chunk.lhs, i);
+                    const rhs = try common.readI32(chunk.rhs, i);
+                    builder.append(applyCompareI32(lhs, rhs, op)) catch |err| return common.kernelAppendError(err);
+                }
             }
-            const lhs = try common.readI64(chunk.lhs, i);
-            const rhs = try common.readI64(chunk.rhs, i);
-            builder.append(op(lhs, rhs)) catch |err| return common.kernelAppendError(err);
-        }
+        },
+        .int64 => {
+            while (try iter.next()) |chunk_value| {
+                var chunk = chunk_value;
+                defer chunk.deinit();
+                var i: usize = 0;
+                while (i < chunk.len) : (i += 1) {
+                    if (chunk.binaryNullAt(i)) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+                    const lhs = try common.readI64(chunk.lhs, i);
+                    const rhs = try common.readI64(chunk.rhs, i);
+                    builder.append(applyCompareI64(lhs, rhs, op)) catch |err| return common.kernelAppendError(err);
+                }
+            }
+        },
+        .double => {
+            while (try iter.next()) |chunk_value| {
+                var chunk = chunk_value;
+                defer chunk.deinit();
+                var i: usize = 0;
+                while (i < chunk.len) : (i += 1) {
+                    if (chunk.binaryNullAt(i)) {
+                        builder.appendNull() catch |err| return common.kernelAppendError(err);
+                        continue;
+                    }
+                    const lhs = try common.readF64(chunk.lhs, i);
+                    const rhs = try common.readF64(chunk.rhs, i);
+                    builder.append(applyCompareF64(lhs, rhs, op)) catch |err| return common.kernelAppendError(err);
+                }
+            }
+        },
+        else => return error.InvalidInput,
     }
 
     const out = builder.finish() catch |err| return common.kernelAppendError(err);
     return compute.Datum.fromArray(out);
-}
-
-fn opEqual(lhs: i64, rhs: i64) bool {
-    return lhs == rhs;
-}
-
-fn opNotEqual(lhs: i64, rhs: i64) bool {
-    return lhs != rhs;
-}
-
-fn opLess(lhs: i64, rhs: i64) bool {
-    return lhs < rhs;
-}
-
-fn opLessEqual(lhs: i64, rhs: i64) bool {
-    return lhs <= rhs;
-}
-
-fn opGreater(lhs: i64, rhs: i64) bool {
-    return lhs > rhs;
-}
-
-fn opGreaterEqual(lhs: i64, rhs: i64) bool {
-    return lhs >= rhs;
 }
 
 pub fn equalKernel(
@@ -67,7 +112,7 @@ pub fn equalKernel(
     args: []const compute.Datum,
     options: compute.Options,
 ) compute.KernelError!compute.Datum {
-    return compareI64Kernel(ctx, args, options, opEqual);
+    return compareKernel(ctx, args, options, .equal);
 }
 
 pub fn notEqualKernel(
@@ -75,7 +120,7 @@ pub fn notEqualKernel(
     args: []const compute.Datum,
     options: compute.Options,
 ) compute.KernelError!compute.Datum {
-    return compareI64Kernel(ctx, args, options, opNotEqual);
+    return compareKernel(ctx, args, options, .not_equal);
 }
 
 pub fn lessKernel(
@@ -83,7 +128,7 @@ pub fn lessKernel(
     args: []const compute.Datum,
     options: compute.Options,
 ) compute.KernelError!compute.Datum {
-    return compareI64Kernel(ctx, args, options, opLess);
+    return compareKernel(ctx, args, options, .less);
 }
 
 pub fn lessEqualKernel(
@@ -91,7 +136,7 @@ pub fn lessEqualKernel(
     args: []const compute.Datum,
     options: compute.Options,
 ) compute.KernelError!compute.Datum {
-    return compareI64Kernel(ctx, args, options, opLessEqual);
+    return compareKernel(ctx, args, options, .less_equal);
 }
 
 pub fn greaterKernel(
@@ -99,7 +144,7 @@ pub fn greaterKernel(
     args: []const compute.Datum,
     options: compute.Options,
 ) compute.KernelError!compute.Datum {
-    return compareI64Kernel(ctx, args, options, opGreater);
+    return compareKernel(ctx, args, options, .greater);
 }
 
 pub fn greaterEqualKernel(
@@ -107,5 +152,5 @@ pub fn greaterEqualKernel(
     args: []const compute.Datum,
     options: compute.Options,
 ) compute.KernelError!compute.Datum {
-    return compareI64Kernel(ctx, args, options, opGreaterEqual);
+    return compareKernel(ctx, args, options, .greater_equal);
 }
