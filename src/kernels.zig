@@ -53,6 +53,19 @@ fn makeInt32Array(allocator: std.mem.Allocator, values: []const ?i32) !zcore.Arr
     return builder.finish();
 }
 
+fn makeFloat64Array(allocator: std.mem.Allocator, values: []const ?f64) !zcore.ArrayRef {
+    var builder = try zcore.Float64Builder.init(allocator, values.len);
+    defer builder.deinit();
+    for (values) |v| {
+        if (v) |x| {
+            try builder.append(x);
+        } else {
+            try builder.appendNull();
+        }
+    }
+    return builder.finish();
+}
+
 fn makeBoolArray(allocator: std.mem.Allocator, values: []const ?bool) !zcore.ArrayRef {
     var builder = try zcore.BooleanBuilder.init(allocator, values.len);
     defer builder.deinit();
@@ -350,6 +363,36 @@ fn makeNestedScalarDatum(payload: zcore.ArrayRef) !compute.Datum {
 fn expectInt64ArrayValues(datum: compute.Datum, expected: []const ?i64) !void {
     try std.testing.expect(datum.isArray());
     const view = zcore.Int64Array{ .data = datum.array.data() };
+    try std.testing.expectEqual(expected.len, view.len());
+    var i: usize = 0;
+    while (i < expected.len) : (i += 1) {
+        if (expected[i]) |v| {
+            try std.testing.expect(!view.isNull(i));
+            try std.testing.expectEqual(v, view.value(i));
+        } else {
+            try std.testing.expect(view.isNull(i));
+        }
+    }
+}
+
+fn expectInt32ArrayValues(datum: compute.Datum, expected: []const ?i32) !void {
+    try std.testing.expect(datum.isArray());
+    const view = zcore.Int32Array{ .data = datum.array.data() };
+    try std.testing.expectEqual(expected.len, view.len());
+    var i: usize = 0;
+    while (i < expected.len) : (i += 1) {
+        if (expected[i]) |v| {
+            try std.testing.expect(!view.isNull(i));
+            try std.testing.expectEqual(v, view.value(i));
+        } else {
+            try std.testing.expect(view.isNull(i));
+        }
+    }
+}
+
+fn expectFloat64ArrayValues(datum: compute.Datum, expected: []const ?f64) !void {
+    try std.testing.expect(datum.isArray());
+    const view = zcore.Float64Array{ .data = datum.array.data() };
     try std.testing.expectEqual(expected.len, view.len());
     var i: usize = 0;
     while (i < expected.len) : (i += 1) {
