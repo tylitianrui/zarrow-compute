@@ -27,6 +27,7 @@ It reuses the compute framework layer (`zarrow-core`) from [`tylitianrui/zarrow`
 - `cast_i64_to_i32` (vector)
 - `cast` (vector, current numeric/bool subset, `Options.cast`)
 - `count_rows` (aggregate with stateful lifecycle)
+- `all` / `any` (aggregate, current `bool` subset, null-aware semantics)
 - `count` / `sum` / `min` / `max` / `mean` (aggregate, current `int64` subset)
 
 ## Quick Start

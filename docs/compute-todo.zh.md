@@ -25,19 +25,19 @@
 
 ## 1. Aggregations
 
-- [ ] `all`
-- [ ] `any`
+- [x] `all`（当前 `bool` 子集，忽略 null；无非 null 输入返回 null）
+- [x] `any`（当前 `bool` 子集，忽略 null；无非 null 输入返回 null）
 - [ ] `approximate_median`
-- [ ] `count`
+- [x] `count`（当前已实现）
 - [ ] `count_distinct`
 - [ ] `first`
 - [ ] `first_last`
 - [ ] `index`
 - [ ] `kurtosis`
 - [ ] `last`
-- [ ] `max`
-- [ ] `mean`
-- [ ] `min`
+- [x] `max`（当前 `int64` 子集）
+- [x] `mean`（当前 `int64` 子集）
+- [x] `min`（当前 `int64` 子集）
 - [ ] `min_max`
 - [ ] `mode`
 - [ ] `pivot_wider`
@@ -45,7 +45,7 @@
 - [ ] `quantile`
 - [ ] `skew`
 - [ ] `stddev`
-- [ ] `sum`
+- [x] `sum`（当前 `int64` 子集）
 - [ ] `tdigest`
 - [ ] `variance`
 

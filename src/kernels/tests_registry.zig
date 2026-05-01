@@ -38,7 +38,7 @@ test "register base kernels exposes expected registry surface and resolvable sig
     defer registry.deinit();
     try registerBaseKernels(&registry);
 
-    try std.testing.expectEqual(@as(usize, 46), registry.functionCount());
+    try std.testing.expectEqual(@as(usize, 48), registry.functionCount());
 
     const vector_names = [_][]const u8{
         "add_i64",
@@ -91,6 +91,8 @@ test "register base kernels exposes expected registry surface and resolvable sig
     try std.testing.expect(registry.containsFunction("count_rows", .aggregate));
     try std.testing.expectEqual(@as(usize, 1), registry.kernelCount("count_rows", .aggregate));
     try std.testing.expect(!registry.containsFunction("count_rows", .vector));
+    try std.testing.expect(registry.containsFunction("all", .aggregate));
+    try std.testing.expect(registry.containsFunction("any", .aggregate));
     try std.testing.expect(registry.containsFunction("count", .aggregate));
     try std.testing.expect(registry.containsFunction("sum", .aggregate));
     try std.testing.expect(registry.containsFunction("min", .aggregate));
@@ -380,6 +382,20 @@ test "register base kernels exposes expected registry surface and resolvable sig
         compute.Options.noneValue(),
     );
     try std.testing.expect(count_ty.eql(.{ .int64 = {} }));
+    const all_args = [_]compute.Datum{
+        compute.Datum.fromArray(filter_pred.retain()),
+    };
+    defer {
+        var d = all_args[0];
+        d.release();
+    }
+    const all_ty = try registry.resolveResultType(
+        "all",
+        .aggregate,
+        all_args[0..],
+        compute.Options.noneValue(),
+    );
+    try std.testing.expect(all_ty.eql(.{ .bool = {} }));
 }
 
 test "register compat kernels matches base registry surface" {
@@ -433,5 +449,13 @@ test "register compat kernels matches base registry surface" {
     try std.testing.expectEqual(
         base_registry.kernelCount("count_rows", .aggregate),
         compat_registry.kernelCount("count_rows", .aggregate),
+    );
+    try std.testing.expectEqual(
+        base_registry.containsFunction("all", .aggregate),
+        compat_registry.containsFunction("all", .aggregate),
+    );
+    try std.testing.expectEqual(
+        base_registry.containsFunction("any", .aggregate),
+        compat_registry.containsFunction("any", .aggregate),
     );
 }

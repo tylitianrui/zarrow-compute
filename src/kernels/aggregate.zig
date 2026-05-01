@@ -75,6 +75,86 @@ pub fn meanResultType(args: []const compute.Datum, options: compute.Options) com
     return .{ .double = {} };
 }
 
+pub fn allAnyResultType(args: []const compute.Datum, options: compute.Options) compute.KernelError!compute.DataType {
+    _ = options;
+    if (args.len != 1) return error.InvalidArity;
+    return .{ .bool = {} };
+}
+
+pub fn allAnyKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    options: compute.Options,
+    comptime mode: enum { all, any },
+) compute.KernelError!compute.Datum {
+    _ = ctx;
+    if (!common.onlyNoOptions(options)) return error.InvalidOptions;
+    if (!common.unaryBoolArrayLike(args)) return error.InvalidInput;
+
+    var has_non_null: bool = false;
+    var iter = compute.UnaryExecChunkIterator.init(args[0]);
+    while (try iter.next()) |chunk_value| {
+        var chunk = chunk_value;
+        defer chunk.deinit();
+
+        var i: usize = 0;
+        while (i < chunk.len) : (i += 1) {
+            if (chunk.unaryNullAt(i)) continue;
+            has_non_null = true;
+            const value = try common.readBool(chunk.values, i);
+            switch (mode) {
+                .all => {
+                    if (!value) {
+                        return compute.Datum.fromScalar(.{
+                            .data_type = .{ .bool = {} },
+                            .value = .{ .bool = false },
+                        });
+                    }
+                },
+                .any => {
+                    if (value) {
+                        return compute.Datum.fromScalar(.{
+                            .data_type = .{ .bool = {} },
+                            .value = .{ .bool = true },
+                        });
+                    }
+                },
+            }
+        }
+    }
+
+    if (!has_non_null) {
+        return compute.Datum.fromScalar(.{
+            .data_type = .{ .bool = {} },
+            .value = .null,
+        });
+    }
+
+    return compute.Datum.fromScalar(.{
+        .data_type = .{ .bool = {} },
+        .value = switch (mode) {
+            .all => .{ .bool = true },
+            .any => .{ .bool = false },
+        },
+    });
+}
+
+pub fn allKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    options: compute.Options,
+) compute.KernelError!compute.Datum {
+    return allAnyKernel(ctx, args, options, .all);
+}
+
+pub fn anyKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    options: compute.Options,
+) compute.KernelError!compute.Datum {
+    return allAnyKernel(ctx, args, options, .any);
+}
+
 pub fn sumMinMaxMeanKernel(
     ctx: *compute.ExecContext,
     args: []const compute.Datum,

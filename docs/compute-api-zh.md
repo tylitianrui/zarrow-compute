@@ -34,6 +34,7 @@
 - `cast_i64_to_i32`（vector）
 - `cast`（vector，当前 numeric/bool 子集）
 - `count_rows`（aggregate，支持 lifecycle）
+- `all` / `any`（aggregate，当前 `bool` 子集，忽略 null；当无非 null 输入时返回 null）
 - `count` / `sum` / `min` / `max` / `mean`（aggregate，当前 `int64` 子集）
 
 注册入口：
@@ -75,6 +76,7 @@
 - `case_when` 仅接受 `Options.none`（参数为 `conds_struct, case_0, case_1, ... [, else]`，其中 `conds_struct` 为 `struct<bool...>`，按首个 true 条件选值；值类型支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集）
 - `cast_i64_to_i32` 仅接受 `Options.cast`
 - `count_rows` 仅接受 `Options.none`
+- `all` / `any` 仅接受 `Options.none`（当前 `bool` 输入子集；忽略 null；若无非 null 输入返回 null）
 
 ## 5. 错误语义
 

@@ -170,6 +170,10 @@ pub fn unaryFloat64ArrayLike(args: []const compute.Datum) bool {
     return args.len == 1 and args[0].dataType().eql(.{ .double = {} }) and (args[0].isArray() or args[0].isChunked());
 }
 
+pub fn unaryBoolArrayLike(args: []const compute.Datum) bool {
+    return args.len == 1 and args[0].dataType().eql(.{ .bool = {} }) and (args[0].isArray() or args[0].isChunked());
+}
+
 pub fn unaryIndicesNonZeroSupported(args: []const compute.Datum) bool {
     if (args.len != 1) return false;
     if (!(args[0].isArray() or args[0].isChunked())) return false;

@@ -541,6 +541,134 @@ test "aggregate count/sum/min/max/mean support int64" {
     try std.testing.expectEqual(@as(f64, 2.0), mean_out.scalar.value.f64);
 }
 
+test "aggregate all/any support bool with null-aware semantics" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeBoolArray(allocator, &[_]?bool{ true, null, true, false });
+    defer values.release();
+    const args = [_]compute.Datum{compute.Datum.fromArray(values.retain())};
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    var all_out = try ctx.invokeAggregate("all", args[0..], compute.Options.noneValue());
+    defer all_out.release();
+    try std.testing.expect(all_out.isScalar());
+    try std.testing.expectEqual(false, all_out.scalar.value.bool);
+
+    var any_out = try ctx.invokeAggregate("any", args[0..], compute.Options.noneValue());
+    defer any_out.release();
+    try std.testing.expect(any_out.isScalar());
+    try std.testing.expectEqual(true, any_out.scalar.value.bool);
+}
+
+test "aggregate all/any return null when all inputs are null or empty" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var all_null = try makeBoolArray(allocator, &[_]?bool{ null, null });
+    defer all_null.release();
+    const all_null_args = [_]compute.Datum{compute.Datum.fromArray(all_null.retain())};
+    defer {
+        var d = all_null_args[0];
+        d.release();
+    }
+
+    var all_out = try ctx.invokeAggregate("all", all_null_args[0..], compute.Options.noneValue());
+    defer all_out.release();
+    try std.testing.expect(all_out.isScalar());
+    try std.testing.expect(all_out.scalar.value == .null);
+
+    var any_out = try ctx.invokeAggregate("any", all_null_args[0..], compute.Options.noneValue());
+    defer any_out.release();
+    try std.testing.expect(any_out.isScalar());
+    try std.testing.expect(any_out.scalar.value == .null);
+
+    var empty = try makeBoolArray(allocator, &[_]?bool{});
+    defer empty.release();
+    const empty_args = [_]compute.Datum{compute.Datum.fromArray(empty.retain())};
+    defer {
+        var d = empty_args[0];
+        d.release();
+    }
+
+    var empty_all_out = try ctx.invokeAggregate("all", empty_args[0..], compute.Options.noneValue());
+    defer empty_all_out.release();
+    try std.testing.expect(empty_all_out.isScalar());
+    try std.testing.expect(empty_all_out.scalar.value == .null);
+
+    var empty_any_out = try ctx.invokeAggregate("any", empty_args[0..], compute.Options.noneValue());
+    defer empty_any_out.release();
+    try std.testing.expect(empty_any_out.isScalar());
+    try std.testing.expect(empty_any_out.scalar.value == .null);
+}
+
+test "aggregate all/any support chunked bool input and validate signature" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var c0 = try makeBoolArray(allocator, &[_]?bool{ true, null });
+    defer c0.release();
+    var c1 = try makeBoolArray(allocator, &[_]?bool{ true });
+    defer c1.release();
+    var chunked_all = try compute.ChunkedArray.init(allocator, .{ .bool = {} }, &[_]zcore.ArrayRef{ c0, c1 });
+    defer chunked_all.release();
+    const all_args = [_]compute.Datum{compute.Datum.fromChunked(chunked_all.retain())};
+    defer {
+        var d = all_args[0];
+        d.release();
+    }
+
+    var chunked_all_out = try ctx.invokeAggregate("all", all_args[0..], compute.Options.noneValue());
+    defer chunked_all_out.release();
+    try std.testing.expect(chunked_all_out.isScalar());
+    try std.testing.expectEqual(true, chunked_all_out.scalar.value.bool);
+
+    var c2 = try makeBoolArray(allocator, &[_]?bool{ false, null });
+    defer c2.release();
+    var c3 = try makeBoolArray(allocator, &[_]?bool{ false });
+    defer c3.release();
+    var chunked_any = try compute.ChunkedArray.init(allocator, .{ .bool = {} }, &[_]zcore.ArrayRef{ c2, c3 });
+    defer chunked_any.release();
+    const any_args = [_]compute.Datum{compute.Datum.fromChunked(chunked_any.retain())};
+    defer {
+        var d = any_args[0];
+        d.release();
+    }
+
+    var chunked_any_out = try ctx.invokeAggregate("any", any_args[0..], compute.Options.noneValue());
+    defer chunked_any_out.release();
+    try std.testing.expect(chunked_any_out.isScalar());
+    try std.testing.expectEqual(false, chunked_any_out.scalar.value.bool);
+
+    var i64_values = try makeInt64Array(allocator, &[_]?i64{ 1, 2 });
+    defer i64_values.release();
+    const bad_args = [_]compute.Datum{compute.Datum.fromArray(i64_values.retain())};
+    defer {
+        var d = bad_args[0];
+        d.release();
+    }
+    try std.testing.expectError(
+        error.NoMatchingKernel,
+        ctx.invokeAggregate("all", bad_args[0..], compute.Options.noneValue()),
+    );
+    try std.testing.expectError(
+        error.NoMatchingKernel,
+        ctx.invokeAggregate("any", all_args[0..], .{ .filter = .{} }),
+    );
+}
+
 test "indices_nonzero supports bool and int64 inputs" {
     const allocator = std.testing.allocator;
     var registry = compute.FunctionRegistry.init(allocator);

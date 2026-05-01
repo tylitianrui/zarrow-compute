@@ -27,6 +27,7 @@
 - `cast_i64_to_i32`（vector）
 - `cast`（vector，当前 numeric/bool 子集，使用 `Options.cast`）
 - `count_rows`（aggregate，含 stateful lifecycle）
+- `all` / `any`（aggregate，当前 `bool` 子集，忽略 null；无非 null 输入返回 null）
 - `count` / `sum` / `min` / `max` / `mean`（aggregate，当前 `int64` 子集）
 
 ## 快速开始

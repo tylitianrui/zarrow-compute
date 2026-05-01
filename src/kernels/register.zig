@@ -432,6 +432,26 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
         },
     });
 
+    try registry.registerAggregateKernel("all", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unaryBoolArrayLike,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = aggregate.allAnyResultType,
+        },
+        .exec = aggregate.allKernel,
+    });
+
+    try registry.registerAggregateKernel("any", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unaryBoolArrayLike,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = aggregate.allAnyResultType,
+        },
+        .exec = aggregate.anyKernel,
+    });
+
     try registry.registerAggregateKernel("count", .{
         .signature = .{
             .arity = 1,
