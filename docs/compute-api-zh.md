@@ -19,17 +19,18 @@
 - `indices_nonzero`（vector，当前支持 `bool/int32/int64`）
 - `is_null`（vector，输出 `bool` 掩码）
 - `is_valid`（vector，输出 `bool` 掩码）
+- `is_finite` / `is_inf` / `is_nan`（vector，当前 `float64` 子集）
 - `true_unless_null`（vector，非 null 输出 `true`，null 输出 `false`）
 - `if_else`（vector，支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集）
 - `coalesce`（vector，可变参数，按行选择第一个非 null；值类型支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集）
 - `choose`（vector，可变参数，按 0-based 索引选择值；值类型支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集）
 - `case_when`（vector，Arrow 原生 `struct<bool...> + *cases`，支持可选 else；值类型支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集）
 - `fill_null` / `fill_null_forward` / `fill_null_backward`（vector）
-- `equal` / `not_equal` / `less` / `less_equal` / `greater` / `greater_equal`（vector，当前 `int64` 子集）
-- `invert` / `and_` / `or_` / `and_kleene` / `or_kleene`（vector，`bool`）
-- `subtract_i64`（vector）
-- `divide_i64`（vector）
-- `multiply_i64`（vector）
+- `equal` / `not_equal` / `less` / `less_equal` / `greater` / `greater_equal`（vector，当前 `int32/int64/float64` 子集）
+- `invert` / `and_` / `or_` / `and_kleene` / `or_kleene` / `xor` / `and_not` / `and_not_kleene`（vector，`bool`）
+- `subtract_i64`（vector，当前 `int32/int64/float64` 子集）
+- `divide_i64`（vector，当前 `int32/int64/float64` 子集）
+- `multiply_i64`（vector，当前 `int32/int64/float64` 子集）
 - `cast_i64_to_i32`（vector）
 - `cast`（vector，当前 numeric/bool 子集）
 - `count_rows`（aggregate，支持 lifecycle）
@@ -66,6 +67,7 @@
   - 当前支持值类型：`null`、`bool`、定长 primitive/temporal/decimal/`fixed_size_binary`、`string/large_string/string_view`、`binary/large_binary/binary_view`
 - `drop_null` 仅接受 `Options.none`（删除输入中的 null，保留非 null 值的相对顺序）
 - `is_null` / `is_valid` 仅接受 `Options.none`
+- `is_finite` / `is_inf` / `is_nan` 仅接受 `Options.none`（当前输入类型为 `float64`）
 - `true_unless_null` 仅接受 `Options.none`（非 null 结果为 `true`，null 结果为 `false`）
 - `if_else` 仅接受 `Options.none`（`condition` 为 null 输出 null；`true` 选左值；`false` 选右值；当前支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集）
 - `coalesce` 仅接受 `Options.none`（按行返回首个非 null 值，若全部为 null 则输出 null；值类型支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集）

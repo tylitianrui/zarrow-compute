@@ -12,17 +12,18 @@
 - `indices_nonzero`（vector，当前支持 `bool/int32/int64`，使用 `Options.none`）
 - `is_null`（vector，将 null 位图映射为 `bool` 掩码，使用 `Options.none`）
 - `is_valid`（vector，`is_null` 的反向掩码，使用 `Options.none`）
+- `is_finite` / `is_inf` / `is_nan`（vector，当前 `float64` 子集，使用 `Options.none`）
 - `true_unless_null`（vector，非 null 输出 `true`，null 输出 `false`，使用 `Options.none`）
 - `if_else`（vector，支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集，使用 `Options.none`）
 - `coalesce`（vector，可变参数，按行选择第一个非 null，值类型支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集，使用 `Options.none`）
 - `choose`（vector，可变参数，按 0-based 索引选择值，值类型支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集，使用 `Options.none`）
 - `case_when`（vector，Arrow 原生 `struct<bool...> + *cases` 且支持可选 else，值类型支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集，使用 `Options.none`）
 - `fill_null` / `fill_null_forward` / `fill_null_backward`（vector，使用 `Options.none`）
-- `equal` / `not_equal` / `less` / `less_equal` / `greater` / `greater_equal`（vector，当前 `int64` 子集，使用 `Options.none`）
-- `invert` / `and_` / `or_` / `and_kleene` / `or_kleene`（vector，`bool`，使用 `Options.none`）
-- `subtract_i64`（vector）
-- `divide_i64`（vector）
-- `multiply_i64`（vector）
+- `equal` / `not_equal` / `less` / `less_equal` / `greater` / `greater_equal`（vector，当前 `int32/int64/float64` 子集，使用 `Options.none`）
+- `invert` / `and_` / `or_` / `and_kleene` / `or_kleene` / `xor` / `and_not` / `and_not_kleene`（vector，`bool`，使用 `Options.none`）
+- `subtract_i64`（vector，当前 `int32/int64/float64` 子集）
+- `divide_i64`（vector，当前 `int32/int64/float64` 子集）
+- `multiply_i64`（vector，当前 `int32/int64/float64` 子集）
 - `cast_i64_to_i32`（vector）
 - `cast`（vector，当前 numeric/bool 子集，使用 `Options.cast`）
 - `count_rows`（aggregate，含 stateful lifecycle）

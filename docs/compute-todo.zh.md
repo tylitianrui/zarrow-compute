@@ -7,13 +7,17 @@
 ## 0. 当前实现状态（本仓库）
 
 - 已实现（但为类型子集实现，不代表该函数全类型完成）：
-  - `add`（`add_i64`）
-  - `subtract`（`subtract_i64`）
-  - `multiply`（`multiply_i64`）
-  - `divide`（`divide_i64`）
+  - `add`（`add_i64`，当前 `int32/int64/float64` 子集）
+  - `subtract`（`subtract_i64`，当前 `int32/int64/float64` 子集）
+  - `multiply`（`multiply_i64`，当前 `int32/int64/float64` 子集）
+  - `divide`（`divide_i64`，当前 `int32/int64/float64` 子集）
   - `cast`（当前仅 `int64 -> int32`）
+  - `array_filter`（复用 `filter` 语义）
   - `filter`（当前已覆盖 `null/bool/定长类型/string/binary` 值类型；嵌套/字典等复杂类型待补齐）
   - `drop_null`（当前已覆盖 `null/bool/定长类型/string/binary` 值类型；复杂类型待补齐）
+  - `equal` / `not_equal` / `less` / `less_equal` / `greater` / `greater_equal`（当前 `int32/int64/float64` 子集）
+  - `invert` / `and_` / `or_` / `and_kleene` / `or_kleene` / `xor` / `and_not` / `and_not_kleene`
+  - `is_finite` / `is_inf` / `is_nan`（当前 `float64` 子集）
   - `is_null`（当前支持 array/chunked 输入，输出 `bool` 掩码）
   - `is_valid`（当前支持 array/chunked 输入，输出 `bool` 掩码）
 - 非 Arrow 标准函数（仓库自定义）：
@@ -59,13 +63,13 @@
 
 - [ ] `abs`
 - [ ] `abs_checked`
-- [ ] `add`（当前仅 `int64` 子集）
+- [x] `add`（当前 `int32/int64/float64` 子集）
 - [ ] `add_checked`
-- [ ] `divide`（当前仅 `int64` 子集）
+- [x] `divide`（当前 `int32/int64/float64` 子集）
 - [ ] `divide_checked`
 - [ ] `exp`
 - [ ] `expm1`
-- [ ] `multiply`（当前仅 `int64` 子集）
+- [x] `multiply`（当前 `int32/int64/float64` 子集）
 - [ ] `multiply_checked`
 - [ ] `negate`
 - [ ] `negate_checked`
@@ -74,7 +78,7 @@
 - [ ] `sign`
 - [ ] `sqrt`
 - [ ] `sqrt_checked`
-- [ ] `subtract`（当前仅 `int64` 子集）
+- [x] `subtract`（当前 `int32/int64/float64` 子集）
 - [ ] `subtract_checked`
 
 ## 4. Bit-wise Functions
@@ -138,25 +142,25 @@
 
 ## 9. Comparison Functions
 
-- [ ] `equal`
-- [ ] `greater`
-- [ ] `greater_equal`
-- [ ] `less`
-- [ ] `less_equal`
-- [ ] `not_equal`
+- [x] `equal`（当前 `int32/int64/float64` 子集）
+- [x] `greater`（当前 `int32/int64/float64` 子集）
+- [x] `greater_equal`（当前 `int32/int64/float64` 子集）
+- [x] `less`（当前 `int32/int64/float64` 子集）
+- [x] `less_equal`（当前 `int32/int64/float64` 子集）
+- [x] `not_equal`（当前 `int32/int64/float64` 子集）
 - [ ] `max_element_wise`
 - [ ] `min_element_wise`
 
 ## 10. Logical Functions
 
-- [ ] `and_`
-- [ ] `and_kleene`
-- [ ] `and_not`
-- [ ] `and_not_kleene`
-- [ ] `invert`
-- [ ] `or_`
-- [ ] `or_kleene`
-- [ ] `xor`
+- [x] `and_`
+- [x] `and_kleene`
+- [x] `and_not`
+- [x] `and_not_kleene`
+- [x] `invert`
+- [x] `or_`
+- [x] `or_kleene`
+- [x] `xor`
 
 ## 11. String Predicates
 
@@ -258,13 +262,13 @@
 
 ## 17. Null / Conditional / Selection Core
 
-- [ ] `indices_nonzero`
-- [ ] `is_finite`
-- [ ] `is_inf`
-- [ ] `is_nan`
-- [ ] `is_null`（当前已实现 array/chunked 输入基础版）
-- [ ] `is_valid`（当前已实现 array/chunked 输入基础版）
-- [ ] `true_unless_null`（当前已实现 array/chunked 输入基础版）
+- [x] `indices_nonzero`
+- [x] `is_finite`（当前 `float64` 子集）
+- [x] `is_inf`（当前 `float64` 子集）
+- [x] `is_nan`（当前 `float64` 子集）
+- [x] `is_null`（当前已实现 array/chunked 输入基础版）
+- [x] `is_valid`（当前已实现 array/chunked 输入基础版）
+- [x] `true_unless_null`（当前已实现 array/chunked 输入基础版）
 - [x] `case_when`（当前实现：Arrow 原生 `struct<bool...> + *cases`（可选 else）；值类型支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集）
 - [x] `choose`（当前实现：可变参数 `indices, *values`，`indices` 支持整数类型，值类型支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集）
 - [x] `coalesce`（当前实现：可变参数 `*values`，值类型支持 `null/bool/fixed-width/string/binary/list/large_list/struct` 子集）
@@ -334,13 +338,13 @@
 
 ## 22. Filter / Take / Permutation / Scatter
 
-- [ ] `array_filter`
-- [ ] `array_take`
-- [ ] `drop_null`（当前已覆盖 `null/bool/定长类型/string/binary` 子集，需补齐复杂类型与更高阶输入语义）
-- [ ] `filter`（当前已覆盖 `null/bool/定长类型/string/binary` 子集，需补齐复杂类型与更高阶输入语义）
+- [x] `array_filter`
+- [x] `array_take`
+- [x] `drop_null`（当前已覆盖 `null/bool/定长类型/string/binary` 子集，需补齐复杂类型与更高阶输入语义）
+- [x] `filter`（当前已覆盖 `null/bool/定长类型/string/binary` 子集，需补齐复杂类型与更高阶输入语义）
 - [ ] `inverse_permutation`
 - [ ] `scatter`
-- [ ] `take`
+- [x] `take`
 
 ## 23. Sorting / Ranking / TopK
 
@@ -357,9 +361,9 @@
 
 ## 24. Null Filling
 
-- [ ] `fill_null`
-- [ ] `fill_null_backward`
-- [ ] `fill_null_forward`
+- [x] `fill_null`
+- [x] `fill_null_backward`
+- [x] `fill_null_forward`
 
 ## 25. Nested Types / Struct / Mask
 
