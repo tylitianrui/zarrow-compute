@@ -1,6 +1,6 @@
 pub const std = @import("std");
 pub const zcore = @import("zarrow-core");
-const impl = @import("kernels/impl.zig");
+const impl = @import("impl.zig");
 
 pub const compute = impl.compute;
 pub const registerBaseKernels = impl.registerBaseKernels;
