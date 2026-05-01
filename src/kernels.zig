@@ -1950,6 +1950,62 @@ test "is_valid is inverse of null positions" {
     try std.testing.expect(!view.value(3));
 }
 
+test "is_finite/is_inf/is_nan support float64 with null propagation" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    const pos_inf = std.math.inf(f64);
+    const neg_inf = -std.math.inf(f64);
+    const nan_value = std.math.nan(f64);
+    var values = try makeFloat64Array(allocator, &[_]?f64{ 1.5, pos_inf, neg_inf, nan_value, null });
+    defer values.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    var finite_out = try ctx.invokeVector("is_finite", args[0..], compute.Options.noneValue());
+    defer finite_out.release();
+    try expectBoolArrayValues(finite_out, &[_]?bool{ true, false, false, false, null });
+
+    var inf_out = try ctx.invokeVector("is_inf", args[0..], compute.Options.noneValue());
+    defer inf_out.release();
+    try expectBoolArrayValues(inf_out, &[_]?bool{ false, true, true, false, null });
+
+    var nan_out = try ctx.invokeVector("is_nan", args[0..], compute.Options.noneValue());
+    defer nan_out.release();
+    try expectBoolArrayValues(nan_out, &[_]?bool{ false, false, false, true, null });
+}
+
+test "is_finite rejects non-float input" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeInt64Array(allocator, &[_]?i64{ 1, null, 3 });
+    defer values.release();
+    const args = [_]compute.Datum{
+        compute.Datum.fromArray(values.retain()),
+    };
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    try std.testing.expectError(
+        error.NoMatchingKernel,
+        ctx.invokeVector("is_finite", args[0..], compute.Options.noneValue()),
+    );
+}
+
 test "is_null rejects non-none options" {
     const allocator = std.testing.allocator;
     var registry = compute.FunctionRegistry.init(allocator);
