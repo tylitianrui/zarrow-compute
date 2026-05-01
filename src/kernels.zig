@@ -520,6 +520,50 @@ test "register base kernels exposes expected registry surface and resolvable sig
         .arithmetic = .{},
     });
     try std.testing.expect(add_ty.eql(.{ .int64 = {} }));
+    const add_i32_args = [_]compute.Datum{
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int32 = {} },
+            .value = .{ .i32 = 1 },
+        }),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .int32 = {} },
+            .value = .{ .i32 = 2 },
+        }),
+    };
+    defer {
+        var d = add_i32_args[0];
+        d.release();
+    }
+    defer {
+        var d = add_i32_args[1];
+        d.release();
+    }
+    const add_i32_ty = try registry.resolveResultType("add_i64", .vector, add_i32_args[0..], .{
+        .arithmetic = .{},
+    });
+    try std.testing.expect(add_i32_ty.eql(.{ .int32 = {} }));
+    const add_f64_args = [_]compute.Datum{
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .double = {} },
+            .value = .{ .f64 = 1.0 },
+        }),
+        compute.Datum.fromScalar(.{
+            .data_type = .{ .double = {} },
+            .value = .{ .f64 = 2.0 },
+        }),
+    };
+    defer {
+        var d = add_f64_args[0];
+        d.release();
+    }
+    defer {
+        var d = add_f64_args[1];
+        d.release();
+    }
+    const add_f64_ty = try registry.resolveResultType("add_i64", .vector, add_f64_args[0..], .{
+        .arithmetic = .{},
+    });
+    try std.testing.expect(add_f64_ty.eql(.{ .double = {} }));
 
     var filter_values = try makeInt32Array(allocator, &[_]?i32{ 1, 2 });
     defer filter_values.release();
@@ -809,6 +853,76 @@ test "add_i64 supports scalar broadcast and null propagation" {
     try std.testing.expectEqual(@as(i64, 11), view.value(0));
     try std.testing.expect(view.isNull(1));
     try std.testing.expectEqual(@as(i64, 13), view.value(2));
+}
+
+test "arithmetic kernels support int32 and float64 subsets" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var i32_lhs = try makeInt32Array(allocator, &[_]?i32{ 7, null, -3 });
+    defer i32_lhs.release();
+    var i32_rhs = try makeInt32Array(allocator, &[_]?i32{ 2, 5, 3 });
+    defer i32_rhs.release();
+    const i32_args = [_]compute.Datum{
+        compute.Datum.fromArray(i32_lhs.retain()),
+        compute.Datum.fromArray(i32_rhs.retain()),
+    };
+    defer {
+        var d = i32_args[0];
+        d.release();
+    }
+    defer {
+        var d = i32_args[1];
+        d.release();
+    }
+
+    var add_i32_out = try ctx.invokeVector("add_i64", i32_args[0..], .{ .arithmetic = .{} });
+    defer add_i32_out.release();
+    try expectInt32ArrayValues(add_i32_out, &[_]?i32{ 9, null, 0 });
+
+    var subtract_i32_out = try ctx.invokeVector("subtract_i64", i32_args[0..], .{ .arithmetic = .{} });
+    defer subtract_i32_out.release();
+    try expectInt32ArrayValues(subtract_i32_out, &[_]?i32{ 5, null, -6 });
+
+    var multiply_i32_out = try ctx.invokeVector("multiply_i64", i32_args[0..], .{ .arithmetic = .{} });
+    defer multiply_i32_out.release();
+    try expectInt32ArrayValues(multiply_i32_out, &[_]?i32{ 14, null, -9 });
+
+    var divide_i32_out = try ctx.invokeVector(
+        "divide_i64",
+        i32_args[0..],
+        .{ .arithmetic = .{ .divide_by_zero_is_error = false } },
+    );
+    defer divide_i32_out.release();
+    try expectInt32ArrayValues(divide_i32_out, &[_]?i32{ 3, null, -1 });
+
+    var f64_lhs = try makeFloat64Array(allocator, &[_]?f64{ 1.5, null, 8.0 });
+    defer f64_lhs.release();
+    var f64_rhs = try makeFloat64Array(allocator, &[_]?f64{ 0.5, 2.0, 4.0 });
+    defer f64_rhs.release();
+    const f64_args = [_]compute.Datum{
+        compute.Datum.fromArray(f64_lhs.retain()),
+        compute.Datum.fromArray(f64_rhs.retain()),
+    };
+    defer {
+        var d = f64_args[0];
+        d.release();
+    }
+    defer {
+        var d = f64_args[1];
+        d.release();
+    }
+
+    var add_f64_out = try ctx.invokeVector("add_i64", f64_args[0..], .{ .arithmetic = .{} });
+    defer add_f64_out.release();
+    try expectFloat64ArrayValues(add_f64_out, &[_]?f64{ 2.0, null, 12.0 });
+
+    var divide_f64_out = try ctx.invokeVector("divide_i64", f64_args[0..], .{ .arithmetic = .{} });
+    defer divide_f64_out.release();
+    try expectFloat64ArrayValues(divide_f64_out, &[_]?f64{ 3.0, null, 2.0 });
 }
 
 test "filter keeps selected values, propagates value nulls, and drops null predicates by default" {
@@ -4473,6 +4587,46 @@ test "comparison and logical kernels support base semantics" {
     var equal_out = try ctx.invokeVector("equal", cmp_args[0..], compute.Options.noneValue());
     defer equal_out.release();
     try expectBoolArrayValues(equal_out, &[_]?bool{ true, null, false });
+
+    var i32_lhs = try makeInt32Array(allocator, &[_]?i32{ 1, null, 3 });
+    defer i32_lhs.release();
+    var i32_rhs = try makeInt32Array(allocator, &[_]?i32{ 2, 2, 3 });
+    defer i32_rhs.release();
+    const i32_cmp_args = [_]compute.Datum{
+        compute.Datum.fromArray(i32_lhs.retain()),
+        compute.Datum.fromArray(i32_rhs.retain()),
+    };
+    defer {
+        var d = i32_cmp_args[0];
+        d.release();
+    }
+    defer {
+        var d = i32_cmp_args[1];
+        d.release();
+    }
+    var less_i32_out = try ctx.invokeVector("less", i32_cmp_args[0..], compute.Options.noneValue());
+    defer less_i32_out.release();
+    try expectBoolArrayValues(less_i32_out, &[_]?bool{ true, null, false });
+
+    var f64_lhs = try makeFloat64Array(allocator, &[_]?f64{ 1.5, null, 2.0 });
+    defer f64_lhs.release();
+    var f64_rhs = try makeFloat64Array(allocator, &[_]?f64{ 1.5, 3.0, 1.0 });
+    defer f64_rhs.release();
+    const f64_cmp_args = [_]compute.Datum{
+        compute.Datum.fromArray(f64_lhs.retain()),
+        compute.Datum.fromArray(f64_rhs.retain()),
+    };
+    defer {
+        var d = f64_cmp_args[0];
+        d.release();
+    }
+    defer {
+        var d = f64_cmp_args[1];
+        d.release();
+    }
+    var greater_equal_f64_out = try ctx.invokeVector("greater_equal", f64_cmp_args[0..], compute.Options.noneValue());
+    defer greater_equal_f64_out.release();
+    try expectBoolArrayValues(greater_equal_f64_out, &[_]?bool{ true, null, true });
 
     var bl = try makeBoolArray(allocator, &[_]?bool{ false, null, true });
     defer bl.release();
