@@ -82,6 +82,26 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
         .exec = selection.arrayTakeKernel,
     });
 
+    try registry.registerVectorKernel("sort_indices", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unarySortIndicesSupported,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultI64,
+        },
+        .exec = selection.sortIndicesKernel,
+    });
+
+    try registry.registerVectorKernel("array_sort_indices", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unarySortIndicesSupported,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultI64,
+        },
+        .exec = selection.arraySortIndicesKernel,
+    });
+
     try registry.registerVectorKernel("indices_nonzero", .{
         .signature = .{
             .arity = 1,

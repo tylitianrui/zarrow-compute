@@ -167,6 +167,119 @@ fn computeBackwardFillIndices(
     return indices;
 }
 
+const SortIndicesI32Context = struct {
+    values: []const i32,
+    is_null: []const bool,
+};
+
+fn lessThanSortIndicesI32(ctx: SortIndicesI32Context, lhs: usize, rhs: usize) bool {
+    const lhs_null = ctx.is_null[lhs];
+    const rhs_null = ctx.is_null[rhs];
+    if (lhs_null != rhs_null) return !lhs_null;
+    if (lhs_null) return lhs < rhs;
+
+    const lhs_v = ctx.values[lhs];
+    const rhs_v = ctx.values[rhs];
+    if (lhs_v < rhs_v) return true;
+    if (lhs_v > rhs_v) return false;
+    return lhs < rhs;
+}
+
+const SortIndicesI64Context = struct {
+    values: []const i64,
+    is_null: []const bool,
+};
+
+fn lessThanSortIndicesI64(ctx: SortIndicesI64Context, lhs: usize, rhs: usize) bool {
+    const lhs_null = ctx.is_null[lhs];
+    const rhs_null = ctx.is_null[rhs];
+    if (lhs_null != rhs_null) return !lhs_null;
+    if (lhs_null) return lhs < rhs;
+
+    const lhs_v = ctx.values[lhs];
+    const rhs_v = ctx.values[rhs];
+    if (lhs_v < rhs_v) return true;
+    if (lhs_v > rhs_v) return false;
+    return lhs < rhs;
+}
+
+const SortIndicesF64Context = struct {
+    values: []const f64,
+    is_null: []const bool,
+};
+
+fn lessThanSortIndicesF64(ctx: SortIndicesF64Context, lhs: usize, rhs: usize) bool {
+    const lhs_null = ctx.is_null[lhs];
+    const rhs_null = ctx.is_null[rhs];
+    if (lhs_null != rhs_null) return !lhs_null;
+    if (lhs_null) return lhs < rhs;
+
+    const lhs_v = ctx.values[lhs];
+    const rhs_v = ctx.values[rhs];
+    const lhs_nan = std.math.isNan(lhs_v);
+    const rhs_nan = std.math.isNan(rhs_v);
+    if (lhs_nan != rhs_nan) return !lhs_nan;
+    if (lhs_nan) return lhs < rhs;
+
+    if (lhs_v < rhs_v) return true;
+    if (lhs_v > rhs_v) return false;
+    return lhs < rhs;
+}
+
+fn sortIndicesForArray(
+    ctx: *compute.ExecContext,
+    values: zcore.ArrayRef,
+) compute.KernelError!compute.Datum {
+    const len = values.data().length;
+    const order = ctx.tempAllocator().alloc(usize, len) catch return error.OutOfMemory;
+    defer ctx.tempAllocator().free(order);
+    const is_null = ctx.tempAllocator().alloc(bool, len) catch return error.OutOfMemory;
+    defer ctx.tempAllocator().free(is_null);
+
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        order[i] = i;
+        is_null[i] = values.data().isNull(i);
+    }
+
+    switch (values.data().data_type) {
+        .int32 => {
+            const view = zcore.Int32Array{ .data = values.data() };
+            const typed_values = view.values() catch return error.InvalidInput;
+            std.mem.sort(usize, order, SortIndicesI32Context{
+                .values = typed_values,
+                .is_null = is_null,
+            }, lessThanSortIndicesI32);
+        },
+        .int64 => {
+            const view = zcore.Int64Array{ .data = values.data() };
+            const typed_values = view.values() catch return error.InvalidInput;
+            std.mem.sort(usize, order, SortIndicesI64Context{
+                .values = typed_values,
+                .is_null = is_null,
+            }, lessThanSortIndicesI64);
+        },
+        .double => {
+            const view = zcore.Float64Array{ .data = values.data() };
+            const typed_values = view.values() catch return error.InvalidInput;
+            std.mem.sort(usize, order, SortIndicesF64Context{
+                .values = typed_values,
+                .is_null = is_null,
+            }, lessThanSortIndicesF64);
+        },
+        else => return error.UnsupportedType,
+    }
+
+    var builder = try zcore.Int64Builder.init(ctx.tempAllocator(), len);
+    defer builder.deinit();
+    for (order) |entry| {
+        const index_i64 = std.math.cast(i64, entry) orelse return error.InvalidInput;
+        builder.append(index_i64) catch |err| return common.kernelAppendError(err);
+    }
+    const out = builder.finish() catch |err| return common.kernelAppendError(err);
+    return compute.Datum.fromArray(out);
+}
+
 pub fn takeKernel(
     ctx: *compute.ExecContext,
     args: []const compute.Datum,
@@ -191,6 +304,28 @@ pub fn arrayTakeKernel(
     options: compute.Options,
 ) compute.KernelError!compute.Datum {
     return takeKernel(ctx, args, options);
+}
+
+pub fn sortIndicesKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    options: compute.Options,
+) compute.KernelError!compute.Datum {
+    if (args.len != 1) return error.InvalidArity;
+    if (!common.onlyNoOptions(options)) return error.InvalidOptions;
+    if (!common.unarySortIndicesSupported(args)) return error.InvalidInput;
+
+    var values = try normalizeToArray(ctx, args[0]);
+    defer values.release();
+    return sortIndicesForArray(ctx, values);
+}
+
+pub fn arraySortIndicesKernel(
+    ctx: *compute.ExecContext,
+    args: []const compute.Datum,
+    options: compute.Options,
+) compute.KernelError!compute.Datum {
+    return sortIndicesKernel(ctx, args, options);
 }
 
 pub fn fillNullKernel(

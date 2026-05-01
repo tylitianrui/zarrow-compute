@@ -9,6 +9,7 @@ It reuses the compute framework layer (`zarrow-core`) from [`tylitianrui/zarrow`
 - `filter` (vector, supports `null/bool/fixed-width/string/binary` value types + `bool` predicate, `Options.filter`)
 - `drop_null` (vector, supports the same value type subset as `filter`, `Options.none`)
 - `take` / `array_take` (vector, nullable integer indices, `Options.none`)
+- `sort_indices` / `array_sort_indices` (vector, current `int32/int64/float64` subset, nulls-last, `Options.none`)
 - `indices_nonzero` (vector, supports `bool/int32/int64`, `Options.none`)
 - `is_null` (vector, null bitmap to bool mask, `Options.none`)
 - `is_valid` (vector, inverse null bitmap to bool mask, `Options.none`)

@@ -38,7 +38,7 @@ test "register base kernels exposes expected registry surface and resolvable sig
     defer registry.deinit();
     try registerBaseKernels(&registry);
 
-    try std.testing.expectEqual(@as(usize, 48), registry.functionCount());
+    try std.testing.expectEqual(@as(usize, 50), registry.functionCount());
 
     const vector_names = [_][]const u8{
         "add_i64",
@@ -48,6 +48,8 @@ test "register base kernels exposes expected registry surface and resolvable sig
         "drop_null",
         "take",
         "array_take",
+        "sort_indices",
+        "array_sort_indices",
         "indices_nonzero",
         "is_null",
         "is_valid",
@@ -205,6 +207,20 @@ test "register base kernels exposes expected registry surface and resolvable sig
         compute.Options.noneValue(),
     );
     try std.testing.expect(drop_null_ty.eql(.{ .int32 = {} }));
+    const sort_indices_ty = try registry.resolveResultType(
+        "sort_indices",
+        .vector,
+        drop_null_args[0..],
+        compute.Options.noneValue(),
+    );
+    try std.testing.expect(sort_indices_ty.eql(.{ .int64 = {} }));
+    const array_sort_indices_ty = try registry.resolveResultType(
+        "array_sort_indices",
+        .vector,
+        drop_null_args[0..],
+        compute.Options.noneValue(),
+    );
+    try std.testing.expect(array_sort_indices_ty.eql(.{ .int64 = {} }));
 
     const is_null_ty = try registry.resolveResultType(
         "is_null",
@@ -426,6 +442,8 @@ test "register compat kernels matches base registry surface" {
         "coalesce",
         "choose",
         "case_when",
+        "sort_indices",
+        "array_sort_indices",
         "subtract_i64",
         "divide_i64",
         "multiply_i64",

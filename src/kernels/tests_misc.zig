@@ -305,6 +305,78 @@ test "take and array_take support nullable indices" {
     try expectInt64ArrayValues(out_array_take, &[_]?i64{ 30, null, null, 10 });
 }
 
+test "sort_indices and array_sort_indices support null ordering and chunked input" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var values = try makeInt32Array(allocator, &[_]?i32{ 3, null, 1, 3, 2 });
+    defer values.release();
+    const args = [_]compute.Datum{compute.Datum.fromArray(values.retain())};
+    defer {
+        var d = args[0];
+        d.release();
+    }
+
+    var out_sort = try ctx.invokeVector("sort_indices", args[0..], compute.Options.noneValue());
+    defer out_sort.release();
+    try expectInt64ArrayValues(out_sort, &[_]?i64{ 2, 4, 0, 3, 1 });
+
+    var out_array_sort = try ctx.invokeVector("array_sort_indices", args[0..], compute.Options.noneValue());
+    defer out_array_sort.release();
+    try expectInt64ArrayValues(out_array_sort, &[_]?i64{ 2, 4, 0, 3, 1 });
+
+    var c0 = try makeInt32Array(allocator, &[_]?i32{ 3, null });
+    defer c0.release();
+    var c1 = try makeInt32Array(allocator, &[_]?i32{ 1, 3, 2 });
+    defer c1.release();
+    var chunked = try compute.ChunkedArray.init(allocator, .{ .int32 = {} }, &[_]zcore.ArrayRef{ c0, c1 });
+    defer chunked.release();
+
+    const chunked_args = [_]compute.Datum{compute.Datum.fromChunked(chunked.retain())};
+    defer {
+        var d = chunked_args[0];
+        d.release();
+    }
+    var out_chunked = try ctx.invokeVector("sort_indices", chunked_args[0..], compute.Options.noneValue());
+    defer out_chunked.release();
+    try expectInt64ArrayValues(out_chunked, &[_]?i64{ 2, 4, 0, 3, 1 });
+}
+
+test "sort_indices validates type and options via dispatch" {
+    const allocator = std.testing.allocator;
+    var registry = compute.FunctionRegistry.init(allocator);
+    defer registry.deinit();
+    try registerBaseKernels(&registry);
+    var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var bool_values = try makeBoolArray(allocator, &[_]?bool{ true, false });
+    defer bool_values.release();
+    const bool_args = [_]compute.Datum{compute.Datum.fromArray(bool_values.retain())};
+    defer {
+        var d = bool_args[0];
+        d.release();
+    }
+    try std.testing.expectError(
+        error.NoMatchingKernel,
+        ctx.invokeVector("sort_indices", bool_args[0..], compute.Options.noneValue()),
+    );
+
+    var int_values = try makeInt32Array(allocator, &[_]?i32{ 1, 0 });
+    defer int_values.release();
+    const int_args = [_]compute.Datum{compute.Datum.fromArray(int_values.retain())};
+    defer {
+        var d = int_args[0];
+        d.release();
+    }
+    try std.testing.expectError(
+        error.NoMatchingKernel,
+        ctx.invokeVector("sort_indices", int_args[0..], .{ .filter = .{} }),
+    );
+}
+
 test "fill_null family supports directional fill semantics" {
     const allocator = std.testing.allocator;
     var registry = compute.FunctionRegistry.init(allocator);
@@ -620,7 +692,7 @@ test "aggregate all/any support chunked bool input and validate signature" {
 
     var c0 = try makeBoolArray(allocator, &[_]?bool{ true, null });
     defer c0.release();
-    var c1 = try makeBoolArray(allocator, &[_]?bool{ true });
+    var c1 = try makeBoolArray(allocator, &[_]?bool{true});
     defer c1.release();
     var chunked_all = try compute.ChunkedArray.init(allocator, .{ .bool = {} }, &[_]zcore.ArrayRef{ c0, c1 });
     defer chunked_all.release();
@@ -637,7 +709,7 @@ test "aggregate all/any support chunked bool input and validate signature" {
 
     var c2 = try makeBoolArray(allocator, &[_]?bool{ false, null });
     defer c2.release();
-    var c3 = try makeBoolArray(allocator, &[_]?bool{ false });
+    var c3 = try makeBoolArray(allocator, &[_]?bool{false});
     defer c3.release();
     var chunked_any = try compute.ChunkedArray.init(allocator, .{ .bool = {} }, &[_]zcore.ArrayRef{ c2, c3 });
     defer chunked_any.release();

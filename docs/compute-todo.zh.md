@@ -348,14 +348,14 @@
 
 ## 23. Sorting / Ranking / TopK
 
-- [ ] `array_sort_indices`
+- [x] `array_sort_indices`
 - [ ] `bottom_k_unstable`
 - [ ] `partition_nth_indices`
 - [ ] `rank`
 - [ ] `rank_normal`
 - [ ] `rank_quantile`
 - [ ] `select_k_unstable`
-- [ ] `sort_indices`
+- [x] `sort_indices`
 - [ ] `top_k_unstable`
 - [ ] `winsorize`
 

@@ -183,6 +183,12 @@ pub fn unaryIndicesNonZeroSupported(args: []const compute.Datum) bool {
     };
 }
 
+pub fn unarySortIndicesSupported(args: []const compute.Datum) bool {
+    return args.len == 1 and
+        (args[0].isArray() or args[0].isChunked()) and
+        isArithmeticComparableType(args[0].dataType());
+}
+
 pub fn ternaryBoolIfElseSupported(args: []const compute.Datum) bool {
     return args.len == 3 and
         args[0].dataType().eql(.{ .bool = {} }) and
