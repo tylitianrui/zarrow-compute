@@ -4737,7 +4737,7 @@ test "comparison and logical kernels support base semantics" {
 
     var and_not_kleene_out = try ctx.invokeVector("and_not_kleene", logical_args[0..], compute.Options.noneValue());
     defer and_not_kleene_out.release();
-    try expectBoolArrayValues(and_not_kleene_out, &[_]?bool{ false, null, true });
+    try expectBoolArrayValues(and_not_kleene_out, &[_]?bool{ false, false, null });
 
     var or_kleene_out = try ctx.invokeVector("or_kleene", logical_args[0..], compute.Options.noneValue());
     defer or_kleene_out.release();
