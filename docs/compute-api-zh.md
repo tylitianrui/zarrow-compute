@@ -42,6 +42,35 @@
 - `registerBaseKernels(registry: *compute.FunctionRegistry)`
 - `registerCompatKernels(registry: *compute.FunctionRegistry)`（当前等价于 `registerBaseKernels`）
 
+## 2.1 数据类型覆盖矩阵（按 kernel 家族）
+
+说明：
+
+- `完整`：该家族在当前已实现 kernel 上可直接使用。
+- `部分`：仅支持子集类型或子集函数。
+- `未支持`：当前无对应实现或类型检查未放行。
+
+| 数据类型家族 | 算术 (`add/sub/mul/div`) | 比较 (`equal/...`) | 选择/条件 (`filter/drop_null/take/fill_null/if_else/coalesce/choose/case_when`) | 空值相关 (`is_null/is_valid/true_unless_null`) | 其他向量 | 聚合 | cast |
+|---|---|---|---|---|---|---|---|
+| `bool` | 未支持 | 未支持 | 完整 | 完整 | `indices_nonzero`/逻辑函数支持 | `all`/`any` 支持；`count/count_rows` 支持 | `bool <-> int32/int64` |
+| `int8/int16/uint*` | 未支持 | 未支持 | 部分（可用于选择/条件家族） | 完整 | `indices_nonzero` 仅 `int32/int64` | `count/count_rows` 支持；`sum/min/max/mean` 不支持 | 未支持 |
+| `int32/int64` | 完整 | 完整 | 完整 | 完整 | `indices_nonzero` 支持 | `count/count_rows` 支持；`sum/min/max/mean` 仅 `int64` | `int32 <-> int64`，`int32/int64 -> bool` |
+| `float32/float64` | 部分（仅 `float64`） | 部分（仅 `float64`） | 部分（选择/条件家族支持） | `is_null/is_valid/true_unless_null` 完整；`is_finite/is_inf/is_nan` 仅 `float64` | - | `count/count_rows` 支持；数值聚合不支持 | 未支持 |
+| `decimal*` | 未支持 | 未支持 | 部分（可用于选择/条件家族） | 完整 | - | `count/count_rows` 支持 | 未支持 |
+| `utf8/large_utf8` (`string/large_string`) | 未支持 | 未支持 | 完整 | 完整 | - | `count/count_rows` 支持 | 未支持 |
+| `string_view` | 未支持 | 未支持 | 完整 | 完整 | - | `count/count_rows` 支持 | 未支持 |
+| `binary/large_binary` | 未支持 | 未支持 | 完整 | 完整 | - | `count/count_rows` 支持 | 未支持 |
+| `binary_view/fixed_size_binary` | 未支持 | 未支持 | 完整 | 完整 | - | `count/count_rows` 支持 | 未支持 |
+| `list/large_list/fixed_size_list` | 未支持 | 未支持 | 完整（含 scalar broadcast 与 null 传播） | 完整 | `take/fill_null` 已覆盖 `fixed_size_list` | `count/count_rows` 支持 | 未支持 |
+| `struct` | 未支持 | 未支持 | 完整（子字段类型需在支持子集内） | 完整 | - | `count/count_rows` 支持 | 未支持 |
+| `map/union` | 未支持 | 未支持 | 未支持 | 完整（仅 `is_null/is_valid/true_unless_null`） | - | `count/count_rows` 支持 | 未支持 |
+| 时间类型 (`date32/date64/timestamp/time32/time64/duration/interval*`) | 未支持 | 未支持 | 部分（可用于选择/条件家族） | 完整 | - | `count/count_rows` 支持 | 未支持 |
+
+补充：
+
+- 嵌套类型质量：`list/large_list/fixed_size_list/struct` 在 `filter/drop_null/if_else/coalesce/choose/case_when` 上有独立回归测试（含 chunked、null 传播、broadcast）。
+- `map/union` 当前没有进入 `isFilterSupportedType/isSelectionSupportedType/isIfElseSupportedType`，因此条件/选择家族不支持。
+
 ## 3. 核心类型（来自 zarrow-core）
 
 - `FunctionRegistry`：管理函数和 kernel

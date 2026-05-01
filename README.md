@@ -30,6 +30,21 @@ It reuses the compute framework layer (`zarrow-core`) from [`tylitianrui/zarrow`
 - `all` / `any` (aggregate, current `bool` subset, null-aware semantics)
 - `count` / `sum` / `min` / `max` / `mean` (aggregate, current `int64` subset)
 
+## Data Type Coverage Snapshot
+
+- Fixed-width primitives:
+  - Arithmetic/compare are currently `int32/int64/float64` only.
+  - Other fixed-width families (`int8/int16/uint*`, `decimal*`, temporal types) are currently usable in selection/conditional kernels.
+- Variable-length:
+  - `string/large_string/string_view/binary/large_binary/binary_view/fixed_size_binary` are supported in selection/conditional kernels.
+- Nested:
+  - `list/large_list/fixed_size_list/struct` are supported in selection/conditional kernels and covered by dedicated tests.
+  - `map/union` are not yet supported in selection/conditional kernels.
+- Temporal:
+  - `date32/date64/timestamp/time32/time64/duration/interval*` are not supported in arithmetic/compare yet, but are supported in selection/conditional kernels.
+
+For a full matrix, see `docs/compute-api-zh.md` section `2.1 数据类型覆盖矩阵（按 kernel 家族）`.
+
 ## Quick Start
 
 ```bash

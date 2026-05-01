@@ -30,6 +30,21 @@
 - `all` / `any`（aggregate，当前 `bool` 子集，忽略 null；无非 null 输入返回 null）
 - `count` / `sum` / `min` / `max` / `mean`（aggregate，当前 `int64` 子集）
 
+## 类型覆盖速览
+
+- 定长数值类型：
+  - 算术/比较目前仅 `int32/int64/float64` 子集。
+  - `int8/int16/uint*/decimal/time*` 目前主要可用于 `filter/drop_null/take/fill_null/if_else/coalesce/choose/case_when` 这类“选择/重排”语义。
+- 变长类型：
+  - `string/large_string/string_view/binary/large_binary/binary_view/fixed_size_binary` 已支持于选择/条件家族。
+- 嵌套类型：
+  - `list/large_list/fixed_size_list/struct` 已支持于选择/条件家族，并有专项测试。
+  - `map/union` 当前未支持（除 `is_null/is_valid/true_unless_null` 这类空值判断可用）。
+- 时间类型：
+  - `date32/date64/timestamp/time32/time64/duration/interval*` 当前不支持算术/比较，但可用于选择/条件家族。
+
+完整矩阵见：[compute-api-zh.md#21-数据类型覆盖矩阵按-kernel-家族](./compute-api-zh.md#21-数据类型覆盖矩阵按-kernel-家族)
+
 ## 快速开始
 
 ```bash
