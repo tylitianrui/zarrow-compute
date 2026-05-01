@@ -112,6 +112,36 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
         .exec = nulls.isValidKernel,
     });
 
+    try registry.registerVectorKernel("is_finite", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unaryFloat64ArrayLike,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultBool,
+        },
+        .exec = nulls.isFiniteKernel,
+    });
+
+    try registry.registerVectorKernel("is_inf", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unaryFloat64ArrayLike,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultBool,
+        },
+        .exec = nulls.isInfKernel,
+    });
+
+    try registry.registerVectorKernel("is_nan", .{
+        .signature = .{
+            .arity = 1,
+            .type_check = common.unaryFloat64ArrayLike,
+            .options_check = common.onlyNoOptions,
+            .result_type_fn = common.resultBool,
+        },
+        .exec = nulls.isNaNKernel,
+    });
+
     try registry.registerVectorKernel("true_unless_null", .{
         .signature = .{
             .arity = 1,

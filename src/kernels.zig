@@ -442,7 +442,7 @@ test "register base kernels exposes expected registry surface and resolvable sig
     defer registry.deinit();
     try registerBaseKernels(&registry);
 
-    try std.testing.expectEqual(@as(usize, 43), registry.functionCount());
+    try std.testing.expectEqual(@as(usize, 46), registry.functionCount());
 
     const vector_names = [_][]const u8{
         "add_i64",
@@ -455,6 +455,9 @@ test "register base kernels exposes expected registry surface and resolvable sig
         "indices_nonzero",
         "is_null",
         "is_valid",
+        "is_finite",
+        "is_inf",
+        "is_nan",
         "true_unless_null",
         "if_else",
         "coalesce",
@@ -619,6 +622,22 @@ test "register base kernels exposes expected registry surface and resolvable sig
         compute.Options.noneValue(),
     );
     try std.testing.expect(is_valid_ty.eql(.{ .bool = {} }));
+    var finite_values = try makeFloat64Array(allocator, &[_]?f64{ 1.0, null });
+    defer finite_values.release();
+    const finite_args = [_]compute.Datum{
+        compute.Datum.fromArray(finite_values.retain()),
+    };
+    defer {
+        var d = finite_args[0];
+        d.release();
+    }
+    const is_finite_ty = try registry.resolveResultType(
+        "is_finite",
+        .vector,
+        finite_args[0..],
+        compute.Options.noneValue(),
+    );
+    try std.testing.expect(is_finite_ty.eql(.{ .bool = {} }));
     const true_unless_null_ty = try registry.resolveResultType(
         "true_unless_null",
         .vector,
@@ -787,6 +806,9 @@ test "register compat kernels matches base registry surface" {
         "drop_null",
         "is_null",
         "is_valid",
+        "is_finite",
+        "is_inf",
+        "is_nan",
         "true_unless_null",
         "if_else",
         "coalesce",
