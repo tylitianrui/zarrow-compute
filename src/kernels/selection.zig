@@ -170,65 +170,116 @@ fn computeBackwardFillIndices(
 const SortIndicesI32Context = struct {
     values: []const i32,
     is_null: []const bool,
+    sort_opts: compute.SortOptions,
 };
 
 fn lessThanSortIndicesI32(ctx: SortIndicesI32Context, lhs: usize, rhs: usize) bool {
     const lhs_null = ctx.is_null[lhs];
     const rhs_null = ctx.is_null[rhs];
-    if (lhs_null != rhs_null) return !lhs_null;
-    if (lhs_null) return lhs < rhs;
+    if (lhs_null != rhs_null) {
+        const nulls_at_start = ctx.sort_opts.null_placement == .at_start;
+        return if (nulls_at_start) lhs_null else !lhs_null;
+    }
+    if (lhs_null) return tieBreakByIndex(ctx.sort_opts, lhs, rhs);
 
     const lhs_v = ctx.values[lhs];
     const rhs_v = ctx.values[rhs];
-    if (lhs_v < rhs_v) return true;
-    if (lhs_v > rhs_v) return false;
-    return lhs < rhs;
+    switch (ctx.sort_opts.order) {
+        .ascending => {
+            if (lhs_v < rhs_v) return true;
+            if (lhs_v > rhs_v) return false;
+        },
+        .descending => {
+            if (lhs_v > rhs_v) return true;
+            if (lhs_v < rhs_v) return false;
+        },
+    }
+    return tieBreakByIndex(ctx.sort_opts, lhs, rhs);
 }
 
 const SortIndicesI64Context = struct {
     values: []const i64,
     is_null: []const bool,
+    sort_opts: compute.SortOptions,
 };
 
 fn lessThanSortIndicesI64(ctx: SortIndicesI64Context, lhs: usize, rhs: usize) bool {
     const lhs_null = ctx.is_null[lhs];
     const rhs_null = ctx.is_null[rhs];
-    if (lhs_null != rhs_null) return !lhs_null;
-    if (lhs_null) return lhs < rhs;
+    if (lhs_null != rhs_null) {
+        const nulls_at_start = ctx.sort_opts.null_placement == .at_start;
+        return if (nulls_at_start) lhs_null else !lhs_null;
+    }
+    if (lhs_null) return tieBreakByIndex(ctx.sort_opts, lhs, rhs);
 
     const lhs_v = ctx.values[lhs];
     const rhs_v = ctx.values[rhs];
-    if (lhs_v < rhs_v) return true;
-    if (lhs_v > rhs_v) return false;
-    return lhs < rhs;
+    switch (ctx.sort_opts.order) {
+        .ascending => {
+            if (lhs_v < rhs_v) return true;
+            if (lhs_v > rhs_v) return false;
+        },
+        .descending => {
+            if (lhs_v > rhs_v) return true;
+            if (lhs_v < rhs_v) return false;
+        },
+    }
+    return tieBreakByIndex(ctx.sort_opts, lhs, rhs);
 }
 
 const SortIndicesF64Context = struct {
     values: []const f64,
     is_null: []const bool,
+    sort_opts: compute.SortOptions,
 };
 
 fn lessThanSortIndicesF64(ctx: SortIndicesF64Context, lhs: usize, rhs: usize) bool {
     const lhs_null = ctx.is_null[lhs];
     const rhs_null = ctx.is_null[rhs];
-    if (lhs_null != rhs_null) return !lhs_null;
-    if (lhs_null) return lhs < rhs;
+    if (lhs_null != rhs_null) {
+        const nulls_at_start = ctx.sort_opts.null_placement == .at_start;
+        return if (nulls_at_start) lhs_null else !lhs_null;
+    }
+    if (lhs_null) return tieBreakByIndex(ctx.sort_opts, lhs, rhs);
 
     const lhs_v = ctx.values[lhs];
     const rhs_v = ctx.values[rhs];
     const lhs_nan = std.math.isNan(lhs_v);
     const rhs_nan = std.math.isNan(rhs_v);
-    if (lhs_nan != rhs_nan) return !lhs_nan;
-    if (lhs_nan) return lhs < rhs;
+    if (lhs_nan != rhs_nan) {
+        const nans_at_start = nanAtStart(ctx.sort_opts);
+        return if (nans_at_start) lhs_nan else !lhs_nan;
+    }
+    if (lhs_nan) return tieBreakByIndex(ctx.sort_opts, lhs, rhs);
 
-    if (lhs_v < rhs_v) return true;
-    if (lhs_v > rhs_v) return false;
-    return lhs < rhs;
+    switch (ctx.sort_opts.order) {
+        .ascending => {
+            if (lhs_v < rhs_v) return true;
+            if (lhs_v > rhs_v) return false;
+        },
+        .descending => {
+            if (lhs_v > rhs_v) return true;
+            if (lhs_v < rhs_v) return false;
+        },
+    }
+    return tieBreakByIndex(ctx.sort_opts, lhs, rhs);
+}
+
+fn tieBreakByIndex(sort_opts: compute.SortOptions, lhs: usize, rhs: usize) bool {
+    return sort_opts.stable and lhs < rhs;
+}
+
+fn nanAtStart(sort_opts: compute.SortOptions) bool {
+    if (sort_opts.nan_placement) |placement| {
+        return placement == .at_start;
+    }
+    return sort_opts.order == .descending;
 }
 
 fn sortIndicesForArray(
     ctx: *compute.ExecContext,
     values: zcore.ArrayRef,
+    sort_opts: compute.SortOptions,
 ) compute.KernelError!compute.Datum {
     const len = values.data().length;
     const order = ctx.tempAllocator().alloc(usize, len) catch return error.OutOfMemory;
@@ -249,6 +300,7 @@ fn sortIndicesForArray(
             std.mem.sort(usize, order, SortIndicesI32Context{
                 .values = typed_values,
                 .is_null = is_null,
+                .sort_opts = sort_opts,
             }, lessThanSortIndicesI32);
         },
         .int64 => {
@@ -257,6 +309,7 @@ fn sortIndicesForArray(
             std.mem.sort(usize, order, SortIndicesI64Context{
                 .values = typed_values,
                 .is_null = is_null,
+                .sort_opts = sort_opts,
             }, lessThanSortIndicesI64);
         },
         .double => {
@@ -265,6 +318,7 @@ fn sortIndicesForArray(
             std.mem.sort(usize, order, SortIndicesF64Context{
                 .values = typed_values,
                 .is_null = is_null,
+                .sort_opts = sort_opts,
             }, lessThanSortIndicesF64);
         },
         else => return error.UnsupportedType,
@@ -312,12 +366,15 @@ pub fn sortIndicesKernel(
     options: compute.Options,
 ) compute.KernelError!compute.Datum {
     if (args.len != 1) return error.InvalidArity;
-    if (!common.onlyNoOptions(options)) return error.InvalidOptions;
+    const sort_opts = switch (options) {
+        .sort => |opts| opts,
+        else => return error.InvalidOptions,
+    };
     if (!common.unarySortIndicesSupported(args)) return error.InvalidInput;
 
     var values = try normalizeToArray(ctx, args[0]);
     defer values.release();
-    return sortIndicesForArray(ctx, values);
+    return sortIndicesForArray(ctx, values, sort_opts);
 }
 
 pub fn arraySortIndicesKernel(

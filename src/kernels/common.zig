@@ -31,6 +31,13 @@ pub fn onlyFilterOptions(options: compute.Options) bool {
     };
 }
 
+pub fn onlySortOptions(options: compute.Options) bool {
+    return switch (options) {
+        .sort => true,
+        else => false,
+    };
+}
+
 pub fn unaryInt64(args: []const compute.Datum) bool {
     return args.len == 1 and args[0].dataType().eql(.{ .int64 = {} });
 }

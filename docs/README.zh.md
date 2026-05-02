@@ -9,7 +9,7 @@
 - `filter`（vector，支持 `null/bool/定长类型/string/binary` values + `bool` predicate，使用 `Options.filter`）
 - `drop_null`（vector，支持与 `filter` 相同的值类型子集，使用 `Options.none`）
 - `take` / `array_take`（vector，支持可空整数索引，使用 `Options.none`）
-- `sort_indices` / `array_sort_indices`（vector，当前 `int32/int64/float64` 子集，null 排在末尾，使用 `Options.none`）
+- `sort_indices` / `array_sort_indices`（vector，当前 `int32/int64/float64` 子集，使用 `Options.sort` 配置升降序/null/NaN/stable）
 - `indices_nonzero`（vector，当前支持 `bool/int32/int64`，使用 `Options.none`）
 - `is_null`（vector，将 null 位图映射为 `bool` 掩码，使用 `Options.none`）
 - `is_valid`（vector，`is_null` 的反向掩码，使用 `Options.none`）

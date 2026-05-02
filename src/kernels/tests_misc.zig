@@ -320,11 +320,11 @@ test "sort_indices and array_sort_indices support null ordering and chunked inpu
         d.release();
     }
 
-    var out_sort = try ctx.invokeVector("sort_indices", args[0..], compute.Options.noneValue());
+    var out_sort = try ctx.invokeVector("sort_indices", args[0..], .{ .sort = .{ .stable = true } });
     defer out_sort.release();
     try expectInt64ArrayValues(out_sort, &[_]?i64{ 2, 4, 0, 3, 1 });
 
-    var out_array_sort = try ctx.invokeVector("array_sort_indices", args[0..], compute.Options.noneValue());
+    var out_array_sort = try ctx.invokeVector("array_sort_indices", args[0..], .{ .sort = .{ .stable = true } });
     defer out_array_sort.release();
     try expectInt64ArrayValues(out_array_sort, &[_]?i64{ 2, 4, 0, 3, 1 });
 
@@ -340,17 +340,55 @@ test "sort_indices and array_sort_indices support null ordering and chunked inpu
         var d = chunked_args[0];
         d.release();
     }
-    var out_chunked = try ctx.invokeVector("sort_indices", chunked_args[0..], compute.Options.noneValue());
+    var out_chunked = try ctx.invokeVector("sort_indices", chunked_args[0..], .{ .sort = .{ .stable = true } });
     defer out_chunked.release();
     try expectInt64ArrayValues(out_chunked, &[_]?i64{ 2, 4, 0, 3, 1 });
 }
 
-test "sort_indices validates type and options via dispatch" {
+test "sort_indices supports sort options and validates type/options via dispatch" {
     const allocator = std.testing.allocator;
     var registry = compute.FunctionRegistry.init(allocator);
     defer registry.deinit();
     try registerBaseKernels(&registry);
     var ctx = compute.ExecContext.init(allocator, &registry);
+
+    var numeric_values = try makeInt32Array(allocator, &[_]?i32{ 3, null, 1, 3, 2 });
+    defer numeric_values.release();
+    const numeric_args = [_]compute.Datum{compute.Datum.fromArray(numeric_values.retain())};
+    defer {
+        var d = numeric_args[0];
+        d.release();
+    }
+    var desc_nulls_start = try ctx.invokeVector("sort_indices", numeric_args[0..], .{
+        .sort = .{
+            .order = .descending,
+            .null_placement = .at_start,
+            .stable = true,
+        },
+    });
+    defer desc_nulls_start.release();
+    try expectInt64ArrayValues(desc_nulls_start, &[_]?i64{ 1, 0, 3, 4, 2 });
+
+    var floats = try makeFloat64Array(allocator, &[_]?f64{ 2.0, std.math.nan(f64), 1.0 });
+    defer floats.release();
+    const float_args = [_]compute.Datum{compute.Datum.fromArray(floats.retain())};
+    defer {
+        var d = float_args[0];
+        d.release();
+    }
+    var nan_start = try ctx.invokeVector("sort_indices", float_args[0..], .{
+        .sort = .{
+            .order = .ascending,
+            .nan_placement = .at_start,
+            .stable = true,
+        },
+    });
+    defer nan_start.release();
+    try expectInt64ArrayValues(nan_start, &[_]?i64{ 1, 2, 0 });
+    try std.testing.expectError(
+        error.NoMatchingKernel,
+        ctx.invokeVector("sort_indices", numeric_args[0..], compute.Options.noneValue()),
+    );
 
     var bool_values = try makeBoolArray(allocator, &[_]?bool{ true, false });
     defer bool_values.release();
@@ -361,7 +399,7 @@ test "sort_indices validates type and options via dispatch" {
     }
     try std.testing.expectError(
         error.NoMatchingKernel,
-        ctx.invokeVector("sort_indices", bool_args[0..], compute.Options.noneValue()),
+        ctx.invokeVector("sort_indices", bool_args[0..], .{ .sort = .{} }),
     );
 
     var int_values = try makeInt32Array(allocator, &[_]?i32{ 1, 0 });

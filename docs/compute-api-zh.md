@@ -16,7 +16,7 @@
 - `filter`（vector，支持 `null/bool/定长类型/string/binary` values + `bool` predicate）
 - `drop_null`（vector，支持 `null/bool/定长类型/string/binary` values）
 - `take` / `array_take`（vector，支持可空整数索引）
-- `sort_indices` / `array_sort_indices`（vector，当前 `int32/int64/float64` 子集，升序、null 在末尾）
+- `sort_indices` / `array_sort_indices`（vector，当前 `int32/int64/float64` 子集，语义由 `Options.sort` 驱动）
 - `indices_nonzero`（vector，当前支持 `bool/int32/int64`）
 - `is_null`（vector，输出 `bool` 掩码）
 - `is_valid`（vector，输出 `bool` 掩码）
@@ -88,6 +88,7 @@
 - `Options.cast`
 - `Options.arithmetic`
 - `Options.filter`
+- `Options.sort`
 - `Options.custom`
 
 本仓库中：
@@ -97,7 +98,8 @@
 - `filter` 仅接受 `Options.filter`（`drop_nulls=true` 时丢弃 predicate null；`drop_nulls=false` 时输出 null）
   - 当前支持值类型：`null`、`bool`、定长 primitive/temporal/decimal/`fixed_size_binary`、`string/large_string/string_view`、`binary/large_binary/binary_view`
 - `drop_null` 仅接受 `Options.none`（删除输入中的 null，保留非 null 值的相对顺序）
-- `sort_indices` / `array_sort_indices` 仅接受 `Options.none`（当前 `int32/int64/float64` 子集，升序、null 在末尾）
+- `sort_indices` / `array_sort_indices` 仅接受 `Options.sort`（当前 `int32/int64/float64` 子集）
+  - 当前支持字段：`order`、`null_placement`、`nan_placement`、`stable`
 - `is_null` / `is_valid` 仅接受 `Options.none`
 - `is_finite` / `is_inf` / `is_nan` 仅接受 `Options.none`（当前输入类型为 `float64`）
 - `true_unless_null` 仅接受 `Options.none`（非 null 结果为 `true`，null 结果为 `false`）

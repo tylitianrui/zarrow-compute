@@ -211,14 +211,14 @@ test "register base kernels exposes expected registry surface and resolvable sig
         "sort_indices",
         .vector,
         drop_null_args[0..],
-        compute.Options.noneValue(),
+        .{ .sort = .{} },
     );
     try std.testing.expect(sort_indices_ty.eql(.{ .int64 = {} }));
     const array_sort_indices_ty = try registry.resolveResultType(
         "array_sort_indices",
         .vector,
         drop_null_args[0..],
-        compute.Options.noneValue(),
+        .{ .sort = .{} },
     );
     try std.testing.expect(array_sort_indices_ty.eql(.{ .int64 = {} }));
 

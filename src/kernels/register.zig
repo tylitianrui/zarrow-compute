@@ -86,7 +86,7 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
         .signature = .{
             .arity = 1,
             .type_check = common.unarySortIndicesSupported,
-            .options_check = common.onlyNoOptions,
+            .options_check = common.onlySortOptions,
             .result_type_fn = common.resultI64,
         },
         .exec = selection.sortIndicesKernel,
@@ -96,7 +96,7 @@ pub fn registerBaseKernels(registry: *compute.FunctionRegistry) compute.KernelEr
         .signature = .{
             .arity = 1,
             .type_check = common.unarySortIndicesSupported,
-            .options_check = common.onlyNoOptions,
+            .options_check = common.onlySortOptions,
             .result_type_fn = common.resultI64,
         },
         .exec = selection.arraySortIndicesKernel,
